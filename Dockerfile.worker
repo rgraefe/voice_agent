@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY pyproject.toml ./
+COPY app ./app
+COPY voice ./voice
+RUN pip install --no-cache-dir '.[voice]' && useradd --create-home --uid 10001 founder
+USER founder
+RUN python -m livekit.agents download-files
+CMD ["python", "-m", "voice.worker", "start"]

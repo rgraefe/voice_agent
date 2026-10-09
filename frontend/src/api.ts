@@ -1,0 +1,17 @@
+export type Topic = {key:string; title:string; question:string; clarification:string};
+export type Config = {goals:Goal[];match_profile:{name:string;rules:MatchRule[]};version:number; name:string; language:'de'|'en'; tone:string; voice_id:string; tts_model:string; stability:number; similarity:number; speed:number; pause_seconds:number; max_minutes:number; guidance:string; topics:Topic[]};
+export type TopicState = {status:string; value:string|null; quote:string|null; evidence_turn:string|null; asked:boolean; clarification_used:boolean};
+export type Interview = {planner_version:number;goals:Record<string,GoalState>;current_goal:string|null;id:string; owner:string; created_at:string; ended_at:string|null; status:string; mode:'voice'|'simulation'; config:Config; topics:Record<string,TopicState>; current_topic:string|null; last_reply:string; transcript:{id:string;role:string;text:string;timestamp:string;interrupted:boolean}[]; metrics:{id:string;kind:string;values:Record<string,number>}[]};
+export type Bootstrap = {user:{role:string}|null; local_demo:boolean;voice_ready:boolean;missing:string[];agent:{name:string;language:string;max_minutes:number};topics:Pick<Topic,'key'|'title'>[]};
+export type History = {id:string;created_at:string;status:string;mode:string;title:string;config_version:number};
+export async function api<T>(path:string, method='GET', body?:unknown):Promise<T> {
+ const response = await fetch('/api'+path, {method, credentials:'same-origin', headers:{'Content-Type':'application/json','X-Requested-With':'founder-app'}, ...(body===undefined?{}:{body:JSON.stringify(body)})});
+ if(!response.ok) {const error=await response.json().catch(()=>null);throw new Error(error?.error?.message || 'Der Dienst ist gerade nicht erreichbar.');}
+ return response.json();
+}
+export const date = (value:string) => new Date(value).toLocaleString('de-DE',{dateStyle:'medium',timeStyle:'short'});
+export const statusLabel:Record<string,string> = {active:'Im Gespräch',review:'Zusammenfassung prüfen',completed:'Abgeschlossen',incomplete:'Vorzeitig beendet',answered:'Geklärt',partial:'Teilweise',blocked:'Bedingung ungeklärt',not_applicable:'Nicht relevant',matched:'Passt',unmatched:'Passt nicht',open:'Offen',vague:'Rückfrage',clear:'Geklärt',unknown:'Ungeklärt'};
+export type Goal = {key:string;topic:string;label:string;criteria:string;question:string;clarification:string;required:boolean;enabled:boolean;max_followups:number;kind:'text'|'choice'|'number';choices:string[];unit:string;condition:{goal_key:string;equals:string}|null};
+export type MatchRule = {goal_key:string;weight:number;operator:'one_of'|'range';accepted:string[];minimum:number|null;maximum:number|null};
+export type GoalState = {status:string;value:string|null;quote:string|null;evidence_turn:string|null;number_value:number|null;choice_value:string|null;asked:boolean;followups_used:number;exhausted:boolean};
+export type Report = {legacy:boolean;configuration_version:number;profile_name:string;configured:boolean;score:number|null;coverage:number|null;completeness:number|null;answered_required:number;total_required:number;goals:(Goal&GoalState&{applicable:boolean|null})[];rules:(MatchRule&{label:string;unit:string;status:string;value:string|null;quote:string|null;evidence_turn:string|null})[];topics:{key:string;label:string;answered:number;total:number}[];transcript:(Interview['transcript'][number]&{offset_seconds:number})[];statistics:{duration_seconds:number;turns:Record<string,number>;words:Record<string,number>;interruptions:number;followups:number}};

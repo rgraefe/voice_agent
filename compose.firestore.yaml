@@ -1,0 +1,8 @@
+services:
+  api:
+    environment:
+      PERSISTENCE_BACKEND: firestore
+      FIRESTORE_PROJECT: ${FIRESTORE_PROJECT:?Set FIRESTORE_PROJECT}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/adc.json
+    volumes:
+      - ${GOOGLE_CREDENTIALS_FILE:?Set the path to local ADC credentials}:/run/secrets/adc.json:ro

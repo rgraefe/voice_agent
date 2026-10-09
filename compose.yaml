@@ -1,0 +1,33 @@
+name: founder-studio
+services:
+  api:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: /app/.local/interviews.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - interviews:/app/.local
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  worker:
+    profiles: [voice]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file: .env
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    init: true
+volumes:
+  interviews:
