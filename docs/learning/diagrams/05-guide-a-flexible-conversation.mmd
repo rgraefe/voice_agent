@@ -1,0 +1,8 @@
+flowchart LR
+    A[Update all mentioned goals] --> B[Evaluate conditions]
+    B --> C{Eligible goals remain?}
+    C -->|Yes| D[Ask next goal]
+    D --> A
+    C -->|No| E[Read summary]
+    E -->|Correction| A
+    E -->|Explicit confirmation| F[Complete]

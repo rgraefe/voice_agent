@@ -1,0 +1,6 @@
+flowchart LR
+    S[Spoken statement] --> T[Recognized transcript]
+    T --> Q[Exact quote and turn ID]
+    Q --> A[Structured answer]
+    A --> R[Report]
+    R -->|Evidence link| T

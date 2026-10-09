@@ -1,0 +1,6 @@
+flowchart LR
+    E[Detected speech end] --> X[One extraction call]
+    X --> V[Validate and save]
+    V --> Q[Canonical reply]
+    Q --> T[Streaming TTS]
+    T --> F[First audible response]

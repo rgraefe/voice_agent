@@ -1,0 +1,7 @@
+flowchart LR
+    Q[Configured question] --> A[Founder answer]
+    A --> C{Sufficient?}
+    C -->|Yes| S[Store answered goal]
+    C -->|No and budget remains| F[Ask clarification]
+    F --> A
+    C -->|No budget remains| O[Keep partial or unknown]

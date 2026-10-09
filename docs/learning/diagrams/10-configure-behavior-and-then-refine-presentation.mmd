@@ -1,0 +1,7 @@
+flowchart LR
+    A[Admin edits draft] --> V[Validate]
+    V --> P[Publish version]
+    A --> F[Save or load file]
+    F --> A
+    P --> N[New interview snapshot]
+    O[Existing interview snapshot] --> R[Existing report unchanged]

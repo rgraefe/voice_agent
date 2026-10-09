@@ -18,6 +18,10 @@ This study pack explains the implementation in this repository, including its li
 
 These are study estimates, not an expectation to memorize every line. Start with the pure domain code, not the large `app/main.py` or `App.tsx` orchestration files.
 
+## Presentation storyline
+
+[Slide-ready demo storyline](DEMO_STORYLINE_SLIDES.md) follows the result-first design rationale with 11 diagrams, speaker notes, source pointers and implementation caveats. Editable Mermaid files are in [diagrams](diagrams/README.md).
+
 ## Separate walkthroughs
 
 - [Backend and voice deep dive](APP_DEEP_DIVE.md)

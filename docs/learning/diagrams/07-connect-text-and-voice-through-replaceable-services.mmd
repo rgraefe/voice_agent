@@ -1,0 +1,8 @@
+flowchart LR
+    B[Browser microphone] --> K[LiveKit transport]
+    K --> S[Deepgram or ElevenLabs STT]
+    S --> L[OpenAI extraction]
+    L --> A[API planner and storage]
+    A --> T[ElevenLabs TTS]
+    T --> K2[LiveKit transport]
+    K2 --> O[Browser speakers]
