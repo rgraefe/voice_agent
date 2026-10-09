@@ -13,6 +13,7 @@ from app.interview import create_interview, apply_turn
 from app.models import AgentConfig, Turn
 from voice.extraction import Extractor
 
+# Bound each diagnostic independently and report sanitized metadata, never provider response text.
 async def check(name, operation):
     started=time.perf_counter()
     try:
@@ -43,6 +44,20 @@ async def main(voice_id=None):
             await client.room.list_rooms(api.ListRoomsRequest())
         return {'authenticated':True}
     async def recognition():
+        if settings.stt_provider == 'elevenlabs':
+            key = settings.elevenlabs_stt_api_key or settings.elevenlabs_api_key
+            async with aiohttp.ClientSession() as client:
+                async with client.ws_connect(
+                    'wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&audio_format=pcm_16000&language_code=de&enable_logging=false',
+                    headers={'xi-api-key': key},
+                ) as ws:
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            payload = json.loads(msg.data)
+                            if payload.get('message_type') == 'session_started':
+                                return {'stream_authenticated': True, 'recognition_quality_tested': False}
+                            raise RuntimeError('Provider rejected stream')
+                    raise RuntimeError('No stream acknowledgement')
         async with aiohttp.ClientSession() as client:
             async with client.ws_connect('wss://api.deepgram.com/v1/listen?model=nova-3&language=de&encoding=linear16&sample_rate=16000&channels=1&mip_opt_out=true',
                                          headers={'Authorization':'Token '+settings.deepgram_api_key}) as ws:
@@ -79,7 +94,8 @@ async def main(voice_id=None):
                     size+=len(chunk);chunks+=1
                 if not size:raise RuntimeError('Empty speech')
                 return {'audio_bytes':size,'received_chunks':chunks}
-    results=await asyncio.gather(check('OpenAI',reasoning),check('LiveKit',transport),check('Deepgram',recognition),check('ElevenLabs',speech))
+    # Probe services concurrently; each result retains its own success/failure status.
+    results=await asyncio.gather(check('OpenAI',reasoning),check('LiveKit',transport),check(settings.stt_provider + ' STT',recognition),check('ElevenLabs TTS',speech))
     print(json.dumps(results,indent=2))
 
 if __name__=='__main__':

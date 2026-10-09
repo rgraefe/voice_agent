@@ -4,6 +4,7 @@ from app.errors import ServiceError
 from app.models import AgentConfig, Interview, TopicState, TranscriptItem, Turn, now
 
 
+# All new interviews use the goal planner; the older branches below support persisted version-1 sessions.
 def create_interview(owner: str, config: AgentConfig, mode: str) -> Interview:
     from app.planner import create
     return create(owner, config, mode)
@@ -103,6 +104,7 @@ def apply_turn(item: Interview, turn: Turn) -> Interview:
     return item
 
 
+# Stopping capture is not confirmation of a summary; retain the unfinished conversation for history.
 def stop_interview(item: Interview) -> Interview:
     if item.status in ("active", "review"):
         item.status, item.ended_at = "incomplete", now()

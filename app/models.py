@@ -35,6 +35,7 @@ def default_topics() -> list[Topic]:
     return [Topic(key=k, title=t, question=q, clarification=c) for k, t, q, c in rows]
 
 
+# Published settings are copied into each interview so later admin edits do not change its rules.
 class AgentConfig(StrictModel):
     version: int = Field(default=1, ge=1)
     name: str = Field(default="Mira", min_length=1, max_length=40)
@@ -91,6 +92,7 @@ class Extraction(StrictModel):
     confirmed_summary: bool = False
 
 
+# Turn IDs provide idempotency; evidence quotes must refer to this turn's original text.
 class Turn(StrictModel):
     id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
     text: str = Field(min_length=1, max_length=10000)
@@ -118,6 +120,7 @@ class TranscriptItem(StrictModel):
 class Interview(StrictModel):
     id: str
     owner: str
+    # Default to version 1 when reading old records that predate explicit planner versioning.
     planner_version: Literal[1, 2] = 1
     goals: dict[str, GoalState] = Field(default_factory=dict)
     current_goal: str | None = None

@@ -3,7 +3,7 @@ import {test,expect} from '@playwright/test';
 test('founder interview simulation, clarification, stop and history',async({page})=>{
  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('/');
- await page.getByRole('button',{name:'Als Startup ansehen'}).click();
+ await page.getByRole('button',{name:'Zum Startup-Interview'}).click();
  await expect(page.getByRole('heading',{name:'Deine Idee. Im Mittelpunkt.'})).toBeVisible();
  await expect(page.getByRole('button',{name:'Interview starten'})).toBeDisabled();
  await page.screenshot({path:'../.local/screenshots/interview-desktop.png',fullPage:true});
@@ -41,7 +41,7 @@ test('admin saves config and can inspect responsive layout',async({page})=>{
 });
 
 test('complete interview produces a confirmed result',async({page})=>{
- await page.goto('/');await page.getByRole('button',{name:'Als Startup ansehen'}).click();
+ await page.goto('/');await page.getByRole('button',{name:'Zum Startup-Interview'}).click();
  await page.getByRole('button',{name:'Text-Testlauf'}).click();
  const answers=[['Lumio',''],['Wir entwickeln SaaS.','SaaS'],['Wir sparen kleinen Firmen Zeit beim Energiemanagement.',''],['Kleine Unternehmen mit mehreren Standorten.',''],['Anna entwickelt, Ben verantwortet Vertrieb.',''],['Unser Produkt zeigt Stromverbrauch und Einsparungen.',''],['Ein MVP ist bei Pilotkunden im Einsatz.','MVP'],['12 zahlende Kunden im September, 2400 EUR Monatsumsatz.',''],['Excel ist die Alternative; wir automatisieren die Auswertung.',''],['Wir planen keine Finanzierungsrunde.','Nein'],['Ein Folgegespräch nächste Woche.','']];
  for(const [answer,choice] of answers){
@@ -71,7 +71,7 @@ test('complete interview produces a confirmed result',async({page})=>{
 
 test('denied microphone permission is shown without starting a session',async({page})=>{
  await page.addInitScript(()=>{Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:()=>Promise.reject(new DOMException('Mikrofonzugriff verweigert.','NotAllowedError'))});});
- await page.goto('/');await page.getByRole('button',{name:'Als Startup ansehen'}).click();
+ await page.goto('/');await page.getByRole('button',{name:'Zum Startup-Interview'}).click();
  await page.getByRole('button',{name:'Mikrofon testen'}).click();
  await expect(page.getByRole('alert')).toContainText('Mikrofonzugriff verweigert');
  await expect(page.getByRole('button',{name:'Text-Testlauf'})).toBeEnabled();

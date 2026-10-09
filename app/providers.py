@@ -5,6 +5,7 @@ import httpx
 from app.errors import ServiceError
 
 
+# Grant access to one interview room and microphone publication only; provider secrets stay on the server.
 async def room_access(settings, item):
     from livekit import api
     token = (api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
@@ -45,9 +46,10 @@ async def voice_preview(settings, config):
             if not response.is_success:
                 try:
                     detail = response.json().get('detail', {})
-                    code = detail.get('status') if isinstance(detail, dict) else None
+                    codes = [detail.get(key) for key in ('code', 'status', 'type')] if isinstance(detail, dict) else []
                 except (ValueError, AttributeError):
-                    code = None
+                    codes = []
+                # Translate known provider codes without exposing response bodies or credentials.
                 messages = {
                     'api_key_id_used_as_api_key': 'In ELEVENLABS_API_KEY steht die Key-ID. Bitte den geheimen API-Schlüssel aus der Schlüsselerstellung eintragen.',
                     'invalid_api_key': 'Der ElevenLabs-API-Schlüssel ist ungültig. Bitte den gespeicherten Schlüssel prüfen.',
@@ -56,8 +58,22 @@ async def voice_preview(settings, config):
                     'voice_not_found': 'Diese Voice-ID ist für deinen ElevenLabs-Zugang nicht verfügbar.',
                     'paid_plan_required': 'ElevenLabs verlangt für diese Stimme oder Funktion einen kostenpflichtigen Tarif. Bitte eine verfügbare Standardstimme wählen.',
                 }
-                if code in messages:
-                    raise ServiceError('VOICE_CONFIGURATION_ERROR', messages[code], 422)
+                messages.update({
+                    'payment_required': 'ElevenLabs verlangt eine Zahlung: Bitte prüfen, ob diese Stimme für deinen API-Tarif freigegeben ist und ausreichend Guthaben vorhanden ist.',
+                    'free_users_not_allowed': 'Diese Stimme ist über die ElevenLabs-API nicht im kostenlosen Tarif verfügbar. Bitte eine freigegebene Stimme wählen oder den Tarif bei ElevenLabs prüfen.',
+                    'invalid_voice_id': 'Die Voice-ID ist ungültig. Bitte nur die ID der Stimme eintragen, keinen Link.',
+                    'unsupported_model': 'Das gewählte Sprachmodell wird für diese Anfrage nicht unterstützt. Bitte ein anderes Modell testen.',
+                    'invalid_voice_settings': 'ElevenLabs lehnt die Stimmeinstellungen ab. Bitte die Einstellungen prüfen.',
+                    'authentication_error': 'ElevenLabs konnte den API-Schlüssel nicht bestätigen. Bitte den gespeicherten Schlüssel prüfen.',
+                    'authorization_error': 'Der ElevenLabs-Zugang hat keine Berechtigung für diese Stimme oder Funktion.',
+                })
+                for code in codes:
+                    if isinstance(code, str) and code in messages:
+                        raise ServiceError('VOICE_CONFIGURATION_ERROR', messages[code], 422)
+                if response.status_code == 402:
+                    raise ServiceError('VOICE_CONFIGURATION_ERROR', messages['payment_required'], 422)
+                if response.status_code == 429:
+                    raise ServiceError('VOICE_RATE_LIMIT', 'ElevenLabs ist gerade ausgelastet oder das Anfragelimit wurde erreicht. Bitte kurz warten und erneut versuchen.', 429, True)
                 response.raise_for_status()
             return response.content
     except httpx.TimeoutException:

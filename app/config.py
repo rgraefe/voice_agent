@@ -19,11 +19,15 @@ class Settings(BaseSettings):
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
     elevenlabs_api_key: str = ""
+    elevenlabs_stt_api_key: str = ""
+    # Server-wide provider selection; it must match in the API and worker environments.
+    stt_provider: Literal["deepgram", "elevenlabs"] = "deepgram"
     deepgram_api_key: str = ""
     openai_api_key: str = ""
     llm_model: str = "gpt-4.1-mini"
 
     @model_validator(mode="after")
+    # Fail during startup rather than run a deployment with development security defaults.
     def production_safety(self):
         if self.environment == "production":
             if any(len(v) < 32 for v in (self.session_secret, self.worker_secret, self.admin_password)):
@@ -34,6 +38,9 @@ class Settings(BaseSettings):
                 raise ValueError("Production requires Firestore and an HTTPS origin")
         return self
 
+    # Configuration readiness only: this does not authenticate keys or check a running worker.
     def missing_voice(self) -> list[str]:
-        names = ["livekit_url", "livekit_api_key", "livekit_api_secret", "worker_secret", "elevenlabs_api_key", "deepgram_api_key", "openai_api_key"]
-        return [name.upper() for name in names if not getattr(self, name)]
+        names = ["livekit_url", "livekit_api_key", "livekit_api_secret", "worker_secret", "elevenlabs_api_key", "openai_api_key"]
+        if self.stt_provider == 'deepgram':
+            names.append('deepgram_api_key')
+        return [name.upper() for name in names if not getattr(self, name).strip()]

@@ -66,6 +66,7 @@ class MatchProfile(Schema):
     rules: list[MatchRule] = Field(default_factory=list, max_length=40)
 
 
+# Model-proposed evidence for one turn; the planner validates its quote before accepting it.
 class GoalAnswer(Schema):
     goal_key: str = Field(pattern=r'^[a-z][a-z0-9_]{0,49}$')
     status: Literal['answered','partial','unknown']
@@ -75,6 +76,7 @@ class GoalAnswer(Schema):
     choice_value: str | None = Field(default=None, max_length=100)
 
 
+# Persisted progress is separate from the model output, including the bounded clarification counter.
 class GoalState(Schema):
     status: Literal['open','partial','answered','unknown'] = 'open'
     value: str | None = None
@@ -121,6 +123,7 @@ def default_goals() -> list[AnswerGoal]:
     return goals
 
 
+# Cross-field checks keep conditions and scoring rules consistent with the configured answer types.
 def validate_goal_config(goals: list[AnswerGoal], profile: MatchProfile):
     by_key = {g.key:g for g in goals}
     if len(by_key)!=len(goals) or not any(g.enabled and g.required for g in goals):

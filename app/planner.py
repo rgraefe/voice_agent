@@ -1,4 +1,5 @@
 """Deterministic goal progression; the language model supplies evidenced answers only."""
+import re
 from datetime import timezone
 from hashlib import sha256
 from uuid import uuid4
@@ -7,6 +8,13 @@ from app.goals import GoalState
 from app.models import Interview, TopicState, TranscriptItem, now
 
 
+def legal_form_only(value):
+    return re.sub(r'[^a-z0-9]', '', value.casefold()) in {
+        'gmbh', 'gmbhcokg', 'ug', 'ughaftungsbeschrnkt', 'ag', 'kg', 'ohg', 'gbr', 'llc', 'ltd', 'inc',
+    }
+
+
+# Three states: True = relevant, False = irrelevant, None = prerequisite not yet known.
 def applicability(item, goal):
     if not goal.enabled:
         return False
@@ -22,6 +30,7 @@ def applicability(item, goal):
     return state.choice_value == goal.condition.equals
 
 
+# Topic cards are a projection of goal state, not a second source of interview decisions.
 def sync_topics(item):
     for topic in item.config.topics:
         goals = [g for g in item.config.goals if g.topic == topic.key and applicability(item, g) is not False]
@@ -33,6 +42,7 @@ def sync_topics(item):
                          'vague' if any(s.asked or s.value for s in states) else 'open')
 
 
+# Exhaust bounded follow-ups before selecting the next relevant goal; required goals take priority.
 def select_next(item):
     for goal in item.config.goals:
         state=item.goals[goal.key]
@@ -50,6 +60,10 @@ def ask(item, goal):
     if state.asked:
         state.followups_used += 1
         question = goal.clarification
+        if goal.key == 'startup_name' and state.value and legal_form_only(state.value):
+            question = ('Ich habe nur die Rechtsform verstanden. Wie lautet der vollständige Firmenname?'
+                        if item.config.language == 'de' else
+                        'I only caught the legal form. What is the full company name?')
     else:
         state.asked = True
         question = goal.question
@@ -80,6 +94,7 @@ def spoken_summary(item):
 
 
 def advance(item, turn):
+    # The same turn ID and payload is a harmless retry; changed content under that ID is a conflict.
     digest=sha256(turn.model_dump_json().encode()).hexdigest()
     if turn.id in item.processed_turns:
         if item.processed_turns[turn.id]!=digest:
@@ -105,6 +120,11 @@ def advance(item, turn):
             raise ServiceError('INVALID_ANSWER','Die Antwort passt nicht zum konfigurierten Antworttyp.',422)
     for answer in turn.extraction.answers:
         state=item.goals[answer.goal_key]
+        if answer.goal_key == 'startup_name' and legal_form_only(answer.value):
+            # A suffix is not a replacement for an already evidenced company name.
+            if state.value and not legal_form_only(state.value):
+                continue
+            answer = answer.model_copy(update={'status': 'partial'})
         for key in ('status','value','quote','number_value','choice_value'):
             setattr(state,key,getattr(answer,key))
         state.evidence_turn=turn.id
@@ -137,6 +157,7 @@ def advance(item, turn):
         ack=turn.extraction.acknowledgment.strip()
         if ack and '?' not in ack:
             item.last_reply=ack+' '+item.last_reply
+    # Only an explicit confirmation without new facts may complete the interview.
     elif was_review and turn.extraction.confirmed_summary and not (turn.extraction.answers or turn.extraction.facts or turn.extraction.observations):
         item.status,item.ended_at='completed',now()
         item.last_reply='Danke! Dein Gesprächsergebnis ist gespeichert.' if de else 'Thank you! Your interview result has been saved.'

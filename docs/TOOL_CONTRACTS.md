@@ -42,3 +42,7 @@ Bericht: score/coverage/completeness können null sein. rules enthalten Status m
 ```
 
 Wichtige Fehler: UNAUTHORIZED (401), FORBIDDEN/CSRF_REJECTED/ORIGIN_REJECTED (403), NOT_FOUND (404), CONFIG_CONFLICT/IDEMPOTENCY_CONFLICT/INTERVIEW_CLOSED (409), INVALID_EVIDENCE/VALIDATION_ERROR (422), RATE_LIMITED (429), VOICE_PROVIDER_ERROR (502), SERVICE_UNAVAILABLE/VOICE_NOT_CONFIGURED (503), VOICE_TIMEOUT (504). Fehlertexte enthalten keine eingegebenen Geheimnisse oder Provider-Antwortbodies.
+
+## Konfigurationsdateien
+
+`POST /api/admin/config/validate` benötigt einen Admin-Zugang und eine vollständige `AgentConfig`. Validiert Typen, Ziele, Bedingungen und Zielprofil ohne Speicherung. Liefert den Entwurf mit der aktuellen veröffentlichten Versionsnummer zurück; `PUT /api/admin/config` bleibt der einzige Veröffentlichungsschritt und prüft weiterhin Versionskonflikte. Ungültige oder unvollständige Dateien: 422. Kein Zugang: 401; Founder-Zugang: 403.

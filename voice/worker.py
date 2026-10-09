@@ -9,14 +9,34 @@ from uuid import uuid4
 import httpx
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, AgentServer, JobContext, cli, llm, room_io, inference
-from livekit.plugins import deepgram, elevenlabs, silero
+from livekit.plugins import elevenlabs, silero
 
 from app.config import Settings
 from app.models import Interview, Turn
 from voice.extraction import Extractor
+from voice.stt import create_stt
 
 load_dotenv()
 settings = Settings()
+
+RETRY_MESSAGES = {
+    'de': (
+        'Bei mir hat es gerade kurz gehakt. Magst du das nochmal sagen?',
+        'Das hat bei mir gerade nicht geklappt. Kannst du es nochmal versuchen?',
+        'Sorry, da ist bei mir etwas schiefgelaufen. Magst du deine Antwort kurz wiederholen?',
+    ),
+    'en': (
+        'I hit a little snag there. Could you say that again?',
+        'That didn’t work on my end. Could you try once more?',
+        'Sorry, something went wrong on my side. Would you mind repeating your answer?',
+    ),
+}
+def endpointing_delay(state):
+    # Names often contain deliberate pauses between brand, activity and legal form.
+    return max(state.config.pause_seconds, 1.2) if state.current_goal == 'startup_name' else state.config.pause_seconds
+
+
+# Load local inference models before assigning a conversation to this worker process.
 def prewarm(process):
     from livekit.local_inference import init_eot
     init_eot()
@@ -66,7 +86,15 @@ class Interviewer(Agent):
         super().__init__(instructions='Conduct the configured interview. All speech comes from the validated interview controller.')
         self.state, self.backend, self.extractor = state, backend, extractor
         self.failures = 0
+        self.retry_index = int(uuid4().hex, 16) % len(RETRY_MESSAGES['de'])
         self.pending_turn = None
+
+    def retry_message(self):
+        messages = RETRY_MESSAGES[self.state.config.language]
+        message = messages[self.retry_index % len(messages)]
+        # Keep rotating even when a successful answer resets the failure count.
+        self.retry_index += 1
+        return message
 
     async def on_enter(self):
         await self.session.say(self.state.last_reply, allow_interruptions=True)
@@ -118,8 +146,7 @@ class Interviewer(Agent):
                 yield ('Die Verbindung ist gerade nicht zuverlässig. Bitte beende das Gespräch und versuche es später erneut.' if de
                        else 'The connection is not reliable right now. Please end the interview and try again later.')
             else:
-                yield ('Entschuldige, das konnte ich gerade nicht verarbeiten. Kannst du das bitte noch einmal sagen?' if de
-                       else 'Sorry, I could not process that. Could you say it once more?')
+                yield self.retry_message()
 
 
 @server.rtc_session(agent_name='founder-interviewer')
@@ -136,16 +163,16 @@ async def entrypoint(ctx: JobContext):
     extractor = Extractor(settings.openai_api_key, settings.llm_model)
     agent = Interviewer(state, backend, extractor)
     session = AgentSession(
-        stt=deepgram.STT(api_key=settings.deepgram_api_key, model='nova-3', language=cfg.language,
-                        interim_results=True, smart_format=True, mip_opt_out=True),
+        stt=create_stt(settings, language=cfg.language),
         llm=ControllerModel(), vad=ctx.proc.userdata['vad'], turn_detection=inference.TurnDetector(version='v1-mini'),
         tts=elevenlabs.TTS(api_key=settings.elevenlabs_api_key, voice_id=cfg.voice_id, model=cfg.tts_model,
             language=cfg.language, enable_logging=False,
             voice_settings=elevenlabs.VoiceSettings(stability=cfg.stability, similarity_boost=cfg.similarity,
                                                   speed=cfg.speed, style=0, use_speaker_boost=False)),
-        min_endpointing_delay=cfg.pause_seconds, max_endpointing_delay=3.0,
+        min_endpointing_delay=endpointing_delay(state), max_endpointing_delay=3.0,
         allow_interruptions=True, min_interruption_duration=0.3, min_interruption_words=1,
         resume_false_interruption=True, preemptive_generation=False, use_tts_aligned_transcript=True)
+    # Retain persistence tasks so shutdown can await outstanding callbacks.
     tasks = set()
 
     def schedule(coro):
@@ -184,6 +211,8 @@ async def entrypoint(ctx: JobContext):
     @session.on('agent_state_changed')
     def agent_state(event):
         nonlocal last_user_end
+        if event.new_state == 'listening':
+            session.update_options(endpointing_opts={'min_delay': endpointing_delay(agent.state)})
         if event.new_state == 'speaking' and last_user_end is not None:
             delay = time.perf_counter() - last_user_end
             last_user_end = None
@@ -194,6 +223,7 @@ async def entrypoint(ctx: JobContext):
     def error(event):
         schedule(backend.request('POST', '/metrics', {'id': uuid4().hex, 'kind': 'error', 'values': {'count': 1}}))
 
+    # Observe server-side stops and duration limits even if the browser disconnects unexpectedly.
     async def watchdog():
         deadline = time.monotonic() + cfg.max_minutes * 60
         while True:
@@ -212,6 +242,7 @@ async def entrypoint(ctx: JobContext):
                 ctx.shutdown(reason='backend unavailable')
                 return
 
+    # Drain transcript and metric writes before closing the backend client they depend on.
     async def shutdown():
         monitor.cancel()
         await session.aclose()

@@ -8,7 +8,7 @@ Stand: 9. Oktober 2026. Diese Anleitung beschreibt den implementierten Stand im 
 flowchart LR
     Browser[React-Browser] <-->|WebRTC-Audio| LK[LiveKit Cloud]
     LK <--> Worker[Python Voice Worker]
-    Worker -->|Streaming-Audio| STT[Deepgram Nova-3]
+    Worker -->|Streaming-Audio| STT[Deepgram Nova-3 oder ElevenLabs Scribe v2 Realtime]
     STT -->|Transkript| Worker
     Worker <-->|Strukturierter Tool-Aufruf| LLM[OpenAI GPT-4.1 mini]
     Worker -->|Antworttext| TTS[ElevenLabs Flash / Turbo]
@@ -69,7 +69,9 @@ Eine bereits konfigurierte `.env` nicht überschreiben.
 | `BACKEND_URL` | `http://localhost:8000`; Adresse der API aus Sicht des Workers |
 | `LIVEKIT_URL` | WebSocket-URL des LiveKit-Projekts |
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Zugangsdaten desselben LiveKit-Projekts für API und Worker |
-| `DEEPGRAM_API_KEY` | Geheimer API-Schlüssel für Streaming-Spracherkennung |
+| `STT_PROVIDER` | `deepgram` (Standard) oder `elevenlabs`; API und Worker gleich konfigurieren |
+| `DEEPGRAM_API_KEY` | Nur bei Deepgram-Spracherkennung erforderlich |
+| `ELEVENLABS_STT_API_KEY` | Optional separater ElevenLabs-STT-Key; sonst wird `ELEVENLABS_API_KEY` verwendet |
 | `OPENAI_API_KEY` | Geheimer API-Schlüssel mit Zugriff auf das konfigurierte Modell |
 | `LLM_MODEL` | Aktueller Standard: `gpt-4.1-mini` |
 | `ELEVENLABS_API_KEY` | Geheimer Schlüssel, ausdrücklich **nicht** die Key-ID |
@@ -87,7 +89,7 @@ Eine bereits konfigurierte `.env` nicht überschreiben.
 
 Diese Ausgabe ist geheim. Die Werte nur lokal übernehmen, nicht in Dokumentation, Chat oder Git kopieren. Ein geändertes `SESSION_SECRET` macht bestehende Login- und Einladungstokens ungültig; die Datenbank wird dadurch nicht gelöscht.
 
-**ElevenLabs-Berechtigungen für die aktuelle Anwendung:** „Restrict Key“ aktivieren, „Text to Speech“ auf „Access“, andere Endpunkte auf „No Access“. „Voices → Read“ ist derzeit nicht nötig, weil die Voice-ID manuell gesetzt und keine Stimmenliste abgerufen wird. Ein Kreditlimit kann zusätzlich gesetzt werden.
+**ElevenLabs-Berechtigungen für die aktuelle Anwendung:** „Restrict Key“ aktivieren, „Text to Speech“ auf „Access“. Bei ElevenLabs-STT zusätzlich „Speech to Text“ für den verwendeten STT-Key auf „Access“ setzen; andere Endpunkte können auf „No Access“ bleiben. „Voices → Read“ ist derzeit nicht nötig, weil die Voice-ID manuell gesetzt und keine Stimmenliste abgerufen wird. Ein Kreditlimit kann zusätzlich gesetzt werden.
 
 Die Voice-ID wird **im Admin-Interface** veröffentlicht und mit der Konfiguration gespeichert, nicht als Umgebungsvariable. Die bereits live getestete Standard-ID `JBFqnCBsd6RMkjVDRZzb` gehört zur Teststimme George; ob eine Stimme im jeweiligen Account verfügbar ist, muss die Hörprobe bestätigen.
 
@@ -104,14 +106,20 @@ Zunächst die lokalen Sprachaktivitäts-/Turn-Detector-Modelle laden:
 **Terminal A – API und gebautes Frontend:**
 
 ```powershell
+Set-Location "C:/Users/ralf/OneDrive/Dokumente/git/voice_agent"
 .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 **Terminal B – Worker:**
 
 ```powershell
+Set-Location "C:/Users/ralf/OneDrive/Dokumente/git/voice_agent"
 .venv/Scripts/python -m voice.worker start --log-level warn
 ```
+
+**Anbieterauswahl vor dem Start:** In `.env` legt `STT_PROVIDER=deepgram` (Standard) oder `STT_PROVIDER=elevenlabs` die Spracherkennung fest. Bei ElevenLabs benötigt der gemeinsame `ELEVENLABS_API_KEY` auch „Speech to Text → Access“. Alternativ dafür `ELEVENLABS_STT_API_KEY` setzen. Nach Änderungen beide Dienste neu starten. Die Auswahl erfolgt derzeit nicht im Admin-Interface.
+
+**Beenden:** Zuerst ein laufendes Interview im Browser mit „Stop“ beenden. Anschließend im Worker-Terminal und danach im API-Terminal jeweils **Strg+C** drücken und warten, bis die Eingabeaufforderung zurückkehrt. Das Schließen des Browser-Tabs allein beendet die Dienste nicht. Für einen Neustart dieselben beiden Befehle erneut ausführen. Nicht mehrere Instanzen parallel starten.
 
 Für Entwicklung ist alternativ `python -m voice.worker dev` mit der Projekt-venv möglich. Nur eine Worker-Instanz für diese lokale Prüfung starten, damit Jobzuordnung und Logs eindeutig bleiben.
 
@@ -132,7 +140,7 @@ Für Vite-Entwicklung im Ordner `frontend` `npm run dev` verwenden und `PUBLIC_O
 ## 5. Verarbeitung eines gesprochenen Beitrags
 
 1. Der Browser veröffentlicht Mikrofon-Audio über WebRTC.
-2. Deepgram Nova-3 liefert laufende Transkription. Silero VAD und der lokale LiveKit-Turn-Detector helfen bei der Erkennung von Sprechpausen und Gesprächsenden.
+2. Die STT-Factory liefert Deepgram Nova-3 oder ElevenLabs Scribe v2 Realtime für laufende Transkription. Silero VAD und der lokale LiveKit-Turn-Detector helfen bei der Erkennung von Sprechpausen und Gesprächsenden.
 3. Nach einem abgeschlossenen User-Turn ruft der Worker das konfigurierte OpenAI-Modell auf. Timeout: sieben Sekunden; keine automatischen SDK-Retries für diesen Modellaufruf.
 4. Das Modell muss `record_interview_observations` mit strukturierten Argumenten aufrufen. Neue Interviews verwenden `GoalExtraction` ohne die früheren Felder `facts` und `observations`.
 5. FastAPI validiert die Angaben und schreibt Transkript, Antworten und Fortschritt atomar. Der Controller bestimmt die nächste Frage oder die Abschlussprüfung.
@@ -278,7 +286,7 @@ Die Tests erzeugen echte lokale Datensätze in der Testdatenbank und verändern 
 .venv/Scripts/python -m scripts.voice_check --live
 ```
 
-Die Prüfung sendet fiktiven Inhalt und eine kurze Hörprobe an echte Anbieter. Sie kann Gebühren verursachen. Sie prüft OpenAI-Extraktion einschließlich Controller-Validierung, LiveKit-Zugang, Deepgram-WebSocket und ElevenLabs-Audio. Die Ausgabe enthält Status, Dauer und begrenzte Fehlercodes, keine Schlüssel oder Provider-Antwortbodies. Die Voice-ID stammt bei SQLite aus der veröffentlichten Konfiguration; alternativ `--voice-id <VOICE_ID>` übergeben. Für die Prüfung zählt das jeweilige `ok`-Feld; die Ausgabe als Ganzes lesen.
+Die Prüfung sendet fiktiven Inhalt und eine kurze Hörprobe an echte Anbieter. Sie kann Gebühren verursachen. Sie prüft OpenAI-Extraktion einschließlich Controller-Validierung, LiveKit-Zugang, den WebSocket-Zugang des gewählten STT-Anbieters und ElevenLabs-Audio. Der ElevenLabs-STT-Check prüft die authentifizierte Sitzung, nicht die Erkennungsqualität. Die Ausgabe enthält Status, Dauer und begrenzte Fehlercodes, keine Schlüssel oder Provider-Antwortbodies. Die Voice-ID stammt bei SQLite aus der veröffentlichten Konfiguration; alternativ `--voice-id <VOICE_ID>` übergeben. Für die Prüfung zählt das jeweilige `ok`-Feld; die Ausgabe als Ganzes lesen.
 
 ### Echter Browser-Rundlauf mit synthetischem Mikrofon
 
@@ -295,7 +303,7 @@ Remove-Item Env:TEST_BASE_URL
 Set-Location ..
 ```
 
-Dieser Test benötigt die lokale Anmeldung „Als Startup ansehen“, also keinen gesetzten `ADMIN_PASSWORD`. Er verwendet echte Anbieter, aber keine Aufnahme des menschlichen Mikrofons. Er legt eine Voice-Sitzung an und beendet sie auch bei einem Testfehler. Die Sitzung bleibt in der lokalen Founder-Historie. `RUN_LIVE_VOICE` sollte anschließend entfernt werden, damit allgemeine Testläufe nicht versehentlich kostenpflichtig werden.
+Dieser Test benötigt die lokale Anmeldung „Zum Startup-Interview“, also keinen gesetzten `ADMIN_PASSWORD`. Er verwendet echte Anbieter, aber keine Aufnahme des menschlichen Mikrofons. Er legt eine Voice-Sitzung an und beendet sie auch bei einem Testfehler. Die Sitzung bleibt in der lokalen Founder-Historie. `RUN_LIVE_VOICE` sollte anschließend entfernt werden, damit allgemeine Testläufe nicht versehentlich kostenpflichtig werden.
 
 Artefakte:
 
@@ -330,7 +338,7 @@ Stimme, Flash-/Turbo-Modell und Pause jeweils einzeln variieren. Eine kürzere P
 | Voice-Start deaktiviert | Schlüssel, `WORKER_SECRET` und veröffentlichte Voice-ID prüfen. |
 | Agent erscheint nicht | Worker läuft? LiveKit-Projekt stimmt in API und Worker überein? Modelle vorhanden? |
 | Key-ID statt API-Schlüssel | Neuen ElevenLabs-Schlüssel erzeugen, Secret beim Erstellen kopieren, `.env` speichern und beide Prozesse neu starten. |
-| ElevenLabs-Berechtigungsfehler | „Text to Speech → Access“ prüfen; bestehende Schlüssel anderer Apps nicht unbedacht einschränken. |
+| ElevenLabs-Berechtigungsfehler | Je nach Funktion „Text to Speech → Access“ oder „Speech to Text → Access“ prüfen; bestehende Schlüssel anderer Apps nicht unbedacht einschränken. |
 | Stimme nicht verfügbar | Voice-ID und Accountzugriff prüfen; mit zugänglicher Standardstimme testen. |
 | Kreditlimit erreicht | Accountkontingent und eigenes Key-Limit prüfen; keine unbegrenzten Wiederholungen starten. |
 | 403 bei Browser-Schreibanfrage | Browser-Origin und `PUBLIC_ORIGIN` vergleichen, insbesondere Hostname und Port. |
@@ -377,3 +385,33 @@ Cloud-Deployment und Firestore wurden noch nicht live abgenommen. Dockerimages w
 - [Live-Testbericht mit bekannten Grenzen](LIVE_TEST_REPORT.md)
 - [Umsetzungsstand](IMPLEMENTATION_PLAN.md)
 - [README](../README.md)
+
+## STT-Factory und Anbieterwechsel
+
+Siehe [Einrichtung der Anbieterauswahl](../README.md#spracherkennung-auswählen) und [Architekturvertrag](ARCHITECTURE.md#austauschbare-spracherkennung). Beide Plugins implementieren `livekit.agents.stt.STT`; `voice/stt.py:create_stt` wird direkt vom Worker verwendet. Kein zusätzlicher Wrapper und keine neuen Pakete sind nötig.
+
+Für ElevenLabs `STT_PROVIDER=elevenlabs` setzen. Der verwendete STT-Key benötigt **Speech to Text → Access**. Bei gemeinsamem Key zusätzlich **Text to Speech → Access**. Ein separater `ELEVENLABS_STT_API_KEY` ersetzt nur den STT-Key. API und Worker neu starten. Deepgram bleibt ohne Änderung der Konfiguration der Standard. Die bisherigen Live-Messungen in diesem Guide beziehen sich auf Deepgram; ElevenLabs STT ist bisher nur offline geprüft.
+
+## Lokaler Mikrofontest
+
+`frontend/src/MicrophoneTest.tsx` misst den Eingangspegel mit der Web Audio API. Die Anzeige erkennt Audiosignale, nicht die Verständlichkeit von Sprache. Es gibt weder eine Verbindung zur Audioausgabe noch eine Aufnahme oder Übertragung. Tracks und AudioContext werden beim Beenden, nach 15 Sekunden, beim Wechsel der Ansicht und beim Start einer Sitzung freigegeben. Auch eine verspätete Mikrofonfreigabe nach Abbruch wird aufgeräumt.
+
+Offline-Browsertests mit simuliertem Mikrofon (im Ordner `frontend`): `npx playwright test --config playwright.microphone.config.ts`. Der Test startet und beendet einen eigenen Vite-Server auf Port 5187; Backend, Provider-Keys und echtes Mikrofon sind nicht erforderlich.
+
+## Mehrteilige Firmennamen
+
+Bei der Frage `startup_name` wartet der Worker mindestens 1,2 Sekunden nach dem erkannten Sprechende; eine höhere konfigurierte Pause bleibt erhalten. Bei anderen Fragen gilt wieder die konfigurierte Pause. Das mildert vorzeitige Antworten zwischen Namensbestandteilen, ist aber keine Garantie für korrekte Transkription.
+
+Die Extraktion soll alle gesprochenen Namensbestandteile erhalten. Der Controller akzeptiert eine isolierte Rechtsform wie „GmbH“ nicht als vollständigen Namen und überschreibt damit keinen bereits belegten Namen. Die konfigurierte Rückfragegrenze bleibt erhalten; nach Ausschöpfen bleibt der Name unvollständig. Fehlende Wörter werden nicht erfunden. Die Absicherung ist mit Regressionstests geprüft; der erneute Live-Test mit einem mehrteiligen Namen steht noch aus. API und Worker für die Änderungen neu starten; vorhandene Gesprächsdaten werden nicht rückwirkend geändert.
+
+## Demo zurücksetzen
+
+Im lokalen Demo-Modus steht unten auf der Seite „Demo zurücksetzen“. Der Button beendet eine aktive Sitzung, trennt die Audioverbindung und lädt die Oberfläche neu. Dadurch verschwinden das ausgewählte Gespräch, Transkript, Formularentwürfe und laufende Mikrofontests aus der aktuellen Ansicht. Die Anmeldung und veröffentlichte Agent-Konfiguration bleiben erhalten; gespeicherte Gespräche werden nicht gelöscht.
+
+Mit „Interview starten“ bzw. „Text-Testlauf“ beginnt anschließend eine neue Sitzung mit neuer ID und ohne bisherigen Gesprächskontext. Scheitert das Speichern des Gesprächsstopps, wird der Fehler angezeigt und kein erfolgreicher Reset behauptet. Außerhalb des lokalen Demo-Modus ist der Button ausgeblendet.
+
+## Agent-Konfiguration speichern und laden
+
+Unter „Agent konfigurieren“ lädt „Konfiguration speichern“ alle aktuellen Formulareinstellungen als `agent-konfiguration.json` herunter, einschließlich noch nicht veröffentlichter Änderungen. Enthalten sind Fragen, Antwortziele, Zielprofil und Stimmeinstellungen. Server-Zugangsdaten sind nicht Teil dieser Datei.
+
+„Konfiguration laden“ öffnet eine gespeicherte JSON-Datei (maximal 1 MB). Die Einstellungen werden validiert und als Entwurf ins Formular übernommen; bestehende Formularänderungen werden dabei ersetzt. Erst „Version veröffentlichen“ aktiviert den Entwurf für neue Gespräche. Ungültige Dateien verändern die Konfiguration nicht. Mehrere Varianten können unter unterschiedlichen Dateinamen aufbewahrt werden.

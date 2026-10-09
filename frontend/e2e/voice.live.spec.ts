@@ -15,7 +15,7 @@ test('live provider voice roundtrip with synthetic microphone',async({page})=>{
   if(r.request().method()==='POST'&&r.url().endsWith('/api/interviews')&&r.ok())interviewId=(await r.json()).id;
  });
  await page.goto('/');
- await page.getByRole('button',{name:'Als Startup ansehen'}).click();
+ await page.getByRole('button',{name:'Zum Startup-Interview'}).click();
  await expect(page.getByRole('button',{name:'Interview starten'})).toBeEnabled();
  try{
   await page.getByRole('button',{name:'Interview starten'}).click();

@@ -27,6 +27,28 @@ def test_granular_goals_skip_future_answers_and_bound_clarification():
     assert item.current_goal=='product'  # team already provided
 
 
+def test_legal_suffix_is_not_a_complete_company_name():
+    item=create_interview('a',AgentConfig(),'voice')
+    answer(item,'startup_name','GMBH.')
+    assert item.goals['startup_name'].status=='partial'
+    assert item.current_goal=='startup_name'
+    assert 'vollständige Firmenname' in item.last_reply
+    answer(item,'startup_name','Intergate Consulting & Trade GmbH')
+    assert item.goals['startup_name'].value=='Intergate Consulting & Trade GmbH'
+    assert item.current_goal=='sector'
+    answer(item,'startup_name','GmbH')
+    assert item.goals['startup_name'].value=='Intergate Consulting & Trade GmbH'
+
+
+def test_name_followup_budget_still_applies():
+    item=create_interview('a',AgentConfig(),'voice')
+    answer(item,'startup_name','GmbH')
+    answer(item,'startup_name','GmbH')
+    assert item.goals['startup_name'].status=='partial'
+    assert item.goals['startup_name'].exhausted
+    assert item.current_goal=='sector'
+
+
 def test_conditions_unknown_is_not_not_applicable_and_correction_reactivates():
     cfg=AgentConfig()
     keys={'fundraising','funding_amount','next_step'}

@@ -13,7 +13,7 @@ Möglicher Einstieg:
 ## 2. Vorbereitung vor dem Termin
 
 - Browser auf [http://localhost:8000](http://localhost:8000) öffnen; aktuelle Version von Edge oder Chrome verwenden.
-- Kopfhörer und das gewünschte Mikrofon anschließen. Browser-Mikrofonberechtigung prüfen.
+- Kopfhörer und das gewünschte Mikrofon anschließen. Mit „Mikrofon testen“ die Browserberechtigung erlauben und kurz sprechen: Der Pegelbalken sollte ausschlagen. Der lokale Test endet nach 15 Sekunden oder mit „Mikrofontest beenden“. Er überträgt und speichert kein Audio.
 - API und Voice Worker müssen laufen. Ein geöffneter Browser allein reicht nicht.
 - Im Admin-Bereich eine Hörprobe abspielen und danach ein kurzes echtes Gespräch testen. Hörproben und Voice-Gespräche verwenden kostenpflichtige APIs.
 - Sprache, Fragen und Stimme prüfen. Die Auswahl „Englisch“ übersetzt vorhandene Fragen nicht automatisch.
@@ -26,14 +26,20 @@ Falls die Umgebung bereits installiert ist, genügen zwei Terminals im Projektve
 **Terminal 1 – Web-App und API:**
 
 ```powershell
+Set-Location "C:/Users/ralf/OneDrive/Dokumente/git/voice_agent"
 .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 **Terminal 2 – Voice Worker:**
 
 ```powershell
+Set-Location "C:/Users/ralf/OneDrive/Dokumente/git/voice_agent"
 .venv/Scripts/python -m voice.worker start --log-level warn
 ```
+
+**Anbieterauswahl vor dem Start:** In `.env` legt `STT_PROVIDER=deepgram` (Standard) oder `STT_PROVIDER=elevenlabs` die Spracherkennung fest. Bei ElevenLabs benötigt der gemeinsame `ELEVENLABS_API_KEY` auch „Speech to Text → Access“. Alternativ dafür `ELEVENLABS_STT_API_KEY` setzen. Nach Änderungen beide Dienste neu starten. Die Auswahl erfolgt derzeit nicht im Admin-Interface.
+
+**Beenden:** Zuerst ein laufendes Interview im Browser mit „Stop“ beenden. Anschließend im Worker-Terminal und danach im API-Terminal jeweils **Strg+C** drücken und warten, bis die Eingabeaufforderung zurückkehrt. Das Schließen des Browser-Tabs allein beendet die Dienste nicht. Für einen Neustart dieselben beiden Befehle erneut ausführen. Nicht mehrere Instanzen parallel starten.
 
 Ersteinrichtung und Fehlerdiagnose stehen im [technischen Guide](TECHNICAL_GUIDE.md).
 
@@ -90,7 +96,7 @@ Beim Hinzufügen eines Kriteriums gegebenenfalls die automatisch ausgewählte er
 
 ## 5. Voice-Interview als Startup
 
-Vor dem Rollenwechsel darf kein Gespräch mehr aktiv sein. Abmelden und lokal **„Als Startup ansehen“** wählen oder den Founder-Einladungslink in einem separaten Browserprofil öffnen. Tabs desselben Browserprofils teilen sich die Anmeldung.
+Vor dem Rollenwechsel darf kein Gespräch mehr aktiv sein. Abmelden und lokal **„Zum Startup-Interview“** wählen oder den Founder-Einladungslink in einem separaten Browserprofil öffnen. Tabs desselben Browserprofils teilen sich die Anmeldung.
 
 1. **„Mikrofon testen“** anklicken.
 2. **„Interview starten“** anklicken und die Browserberechtigung erteilen.
@@ -178,3 +184,15 @@ Ein letzter Worker-Messwert lag bei rund **1,4 Sekunden** ab erkanntem Sprechend
 Eigennamen wurden in den synthetischen Tests teilweise falsch geschrieben. Natürlichkeit der Stimme, tatsächliche Mikrofone, Denkpausen, Unterbrechungen und hörbare End-to-End-Latenz müssen mit echten Personen geprüft werden. Details: [Live-Testbericht](LIVE_TEST_REPORT.md).
 
 Nach der Präsentation das Gespräch beenden, gegebenenfalls Demo-Präferenzen zurücksetzen und die Dienste in den eigenen Terminals mit `Ctrl+C` stoppen, wenn sie nicht weiter gebraucht werden.
+
+## Demo zurücksetzen
+
+Im lokalen Demo-Modus steht unten auf der Seite „Demo zurücksetzen“. Der Button beendet eine aktive Sitzung, trennt die Audioverbindung und lädt die Oberfläche neu. Dadurch verschwinden das ausgewählte Gespräch, Transkript, Formularentwürfe und laufende Mikrofontests aus der aktuellen Ansicht. Die Anmeldung und veröffentlichte Agent-Konfiguration bleiben erhalten; gespeicherte Gespräche werden nicht gelöscht.
+
+Mit „Interview starten“ bzw. „Text-Testlauf“ beginnt anschließend eine neue Sitzung mit neuer ID und ohne bisherigen Gesprächskontext. Scheitert das Speichern des Gesprächsstopps, wird der Fehler angezeigt und kein erfolgreicher Reset behauptet. Außerhalb des lokalen Demo-Modus ist der Button ausgeblendet.
+
+## Agent-Konfiguration speichern und laden
+
+Unter „Agent konfigurieren“ lädt „Konfiguration speichern“ alle aktuellen Formulareinstellungen als `agent-konfiguration.json` herunter, einschließlich noch nicht veröffentlichter Änderungen. Enthalten sind Fragen, Antwortziele, Zielprofil und Stimmeinstellungen. Server-Zugangsdaten sind nicht Teil dieser Datei.
+
+„Konfiguration laden“ öffnet eine gespeicherte JSON-Datei (maximal 1 MB). Die Einstellungen werden validiert und als Entwurf ins Formular übernommen; bestehende Formularänderungen werden dabei ersetzt. Erst „Version veröffentlichen“ aktiviert den Entwurf für neue Gespräche. Ungültige Dateien verändern die Konfiguration nicht. Mehrere Varianten können unter unterschiedlichen Dateinamen aufbewahrt werden.

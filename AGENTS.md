@@ -6,7 +6,7 @@ Build a browser-based startup interview voice agent with two interfaces: adminis
 ## Architecture
 - React + TypeScript frontend.
 - FastAPI + Pydantic backend with structured errors and server-side authorization.
-- LiveKit WebRTC and Python Agents worker; streaming Deepgram STT, OpenAI text LLM, ElevenLabs Flash/Turbo TTS.
+- LiveKit WebRTC and Python Agents worker; streaming Deepgram or ElevenLabs STT through a common factory, OpenAI text LLM, ElevenLabs Flash/Turbo TTS.
 - Firestore for deployed persistence; a durable local store for development is acceptable.
 - Keep interview state and persistence independent of voice providers. No Dialogflow, customer service domain, or avatar in the initial scope.
 - API and static frontend can run on Cloud Run. Voice workers run separately.

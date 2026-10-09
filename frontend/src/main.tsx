@@ -1,3 +1,4 @@
+// Mount the application once; imported styles are shared by all views.
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';

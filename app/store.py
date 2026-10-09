@@ -5,6 +5,7 @@ from pathlib import Path
 from app.errors import ServiceError
 
 
+# Apply the same conservative document-size limit to local and deployed persistence.
 def check_size(result):
     body = json.dumps(result, ensure_ascii=False)
     if len(body.encode()) > 850_000:
@@ -35,6 +36,7 @@ class SqliteStore:
 
     def update(self, kind, key, mutate):
         with self._connect() as db:
+            # Serialize read-modify-write operations so simultaneous callbacks cannot lose updates.
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT body FROM documents WHERE kind=? AND id=?", (kind, key)).fetchone()
             result = mutate(json.loads(row[0]) if row else None)
@@ -64,6 +66,7 @@ class FirestoreStore:
         from google.cloud import firestore
         ref = self.collection(kind).document(key)
 
+        # Firestore may rerun this callback: mutations must not perform external side effects.
         @firestore.transactional
         def commit(transaction):
             result = mutate(ref.get(transaction=transaction).to_dict())

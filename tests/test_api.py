@@ -51,6 +51,32 @@ def test_config_snapshot_and_compare_and_swap(client):
     assert old['config']['version'] == 1
 
 
+def test_config_file_validates_without_publishing_and_rebases_version(client):
+    login(client,'admin')
+    original=client.get('/api/admin/config').json()
+    imported={**original,'name':'Geladener Agent','version':987}
+    result=client.post('/api/admin/config/validate',json=imported)
+    assert result.status_code==200
+    draft=result.json()
+    assert draft=={**imported,'version':original['version']}
+    assert client.get('/api/admin/config').json()==original
+    assert client.put('/api/admin/config',json=draft).status_code==200
+    # Re-importing an older file uses the current publish version.
+    assert client.post('/api/admin/config/validate',json=original).json()['version']==2
+
+
+def test_config_file_rejects_invalid_and_unauthorized_imports(client):
+    from app.models import AgentConfig
+    cfg=AgentConfig().model_dump()
+    assert client.post('/api/admin/config/validate',json=cfg).status_code==401
+    login(client)
+    assert client.post('/api/admin/config/validate',json=cfg).status_code==403
+    login(client,'admin')
+    for data in [{}, {**cfg,'speed':99}, {**cfg,'api_key':'must-not-import'}, {**cfg,'goals':[]}]:
+        assert client.post('/api/admin/config/validate',json=data).status_code==422
+    assert client.get('/api/admin/config').json()['version']==1
+
+
 def test_voice_not_silently_simulated(client):
     login(client)
     r = client.post('/api/interviews', json={'mode':'voice','request_id':'voice-request'})

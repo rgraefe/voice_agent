@@ -11,6 +11,7 @@ def analyze(item):
         applies=applicability(item,goal)
         status='not_applicable' if applies is False else 'blocked' if applies is None else state.status
         goals.append({**goal.model_dump(),**state.model_dump(),'status':status,'applicable':applies})
+    # Unknown conditions still count as unresolved; explicitly inapplicable goals do not.
     required=[g for g in goals if g['required'] and g['applicable'] is not False]
     answered=sum(g['status']=='answered' for g in required)
     if item.planner_version==1:
@@ -20,6 +21,7 @@ def analyze(item):
         denominator=len(required)
     by_key={g['key']:g for g in goals}
     rules=[]
+    # Match uses known evidence only; coverage separately exposes how much evidence is missing.
     known_weight=eligible_weight=matched_weight=0
     for rule in item.config.match_profile.rules if item.planner_version==2 else []:
         g=by_key[rule.goal_key]
@@ -39,10 +41,12 @@ def analyze(item):
                         matched_weight+=rule.weight
         rules.append({**rule.model_dump(),'label':g['label'],'unit':g['unit'],'status':status,
                       'value':g['value'],'quote':g['quote'],'evidence_turn':g['evidence_turn']})
+    # Callback arrival order can differ from the actual speech timestamps.
     transcript=sorted((t.model_dump() for t in item.transcript),key=lambda t:datetime.fromisoformat(t['timestamp']))
     start=datetime.fromisoformat(item.created_at)
     for t in transcript:
         t['offset_seconds']=max(0,round((datetime.fromisoformat(t['timestamp'])-start).total_seconds()))
+    # Word counts describe transcript share, not speaking time (raw audio is not retained).
     words={role:sum(len(re.findall(r'\b\w+\b',t['text'])) for t in transcript if t['role']==role) for role in ('user','assistant')}
     end=datetime.fromisoformat(item.ended_at) if item.ended_at else (datetime.fromisoformat(transcript[-1]['timestamp']) if transcript else start)
     topics=[]

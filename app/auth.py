@@ -9,6 +9,7 @@ from app.errors import ServiceError
 class Auth:
     def __init__(self, settings):
         self.settings = settings
+        # A generated development secret invalidates cookies after a restart; production requires a stable secret.
         self.secret = settings.session_secret or secrets.token_urlsafe(48)
 
     def token(self, subject: str, role: str, lifetime: int = 43200) -> str:
@@ -35,11 +36,13 @@ class Auth:
             raise ServiceError("FORBIDDEN", "Dieser Bereich ist Administratoren vorbehalten.", 403)
         return data
 
+    # Worker callbacks use a separate server credential, never a browser session cookie.
     def worker(self, request: Request):
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
         if not self.settings.worker_secret or not secrets.compare_digest(supplied, self.settings.worker_secret):
             raise ServiceError("UNAUTHORIZED", "Worker authentication required.", 401)
 
+    # Keep the session inaccessible to JavaScript and restrict cross-site cookie use.
     def cookie(self, response, subject, role):
         response.set_cookie("founder_session", self.token(subject, role), httponly=True,
                             secure=self.settings.environment == "production", samesite="strict", max_age=43200)

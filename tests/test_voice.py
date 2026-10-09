@@ -30,6 +30,17 @@ class FakeExtractor:
         return Extraction(answers=[GoalAnswer(goal_key='startup_name',value=text,quote=text,status='answered')]), {'input_tokens':100.0}
 
 
+def test_names_get_extra_pause_without_slowing_other_answers():
+    from voice.worker import endpointing_delay
+    state=create_interview('owner',AgentConfig(),'voice')
+    assert endpointing_delay(state)==1.2
+    state.current_goal='sector'
+    assert endpointing_delay(state)==0.6
+    state.current_goal='startup_name'
+    state.config.pause_seconds=1.8
+    assert endpointing_delay(state)==1.8
+
+
 @pytest.mark.asyncio
 async def test_worker_speaks_only_canonical_persisted_reply():
     backend=FakeBackend()
@@ -50,12 +61,28 @@ async def test_worker_closes_after_repeated_extraction_failure():
     agent=Interviewer(backend.state,backend,Broken())
     agent.pending_turn=('turn1','Acme')
     first=[part async for part in agent.llm_node(None,[],None)]
-    assert 'noch einmal' in first[0]
+    from voice.worker import RETRY_MESSAGES
+    assert first[0] in RETRY_MESSAGES['de']
     second=[part async for part in agent.llm_node(None,[],None)]
     assert 'nicht zuverlässig' in second[0]
     assert backend.state.status=='incomplete'
     assert not any(path=='/turns' for _,path,_ in backend.calls)
     assert any(path=='/speech' for _,path,_ in backend.calls)
+
+
+@pytest.mark.parametrize('language', ['de', 'en'])
+def test_retry_phrases_rotate_independently_of_failure_streak(language):
+    from voice.worker import RETRY_MESSAGES
+    backend=FakeBackend()
+    backend.state.config.language=language
+    agent=Interviewer(backend.state,backend,FakeExtractor())
+    phrases=[]
+    for _ in range(4):
+        agent.failures=0
+        phrases.append(agent.retry_message())
+    assert set(phrases[:3])==set(RETRY_MESSAGES[language])
+    assert phrases[3]==phrases[0]
+    assert all(a!=b for a,b in zip(phrases,phrases[1:]))
 
 
 @pytest.mark.asyncio
@@ -149,3 +176,26 @@ def test_non_message_livekit_events_do_not_break_transcript_callback():
     result=spoken_message(SimpleNamespace(role='assistant',id='spoken',text_content='Hallo',created_at=1700000000.0,interrupted=True))
     assert result['text']=='Hallo' and result['interrupted']
     assert result['timestamp'].endswith('+00:00')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('detail,status,expected',[
+    ({'code':'paid_plan_required','type':'payment_required'},402,'kostenpflichtigen Tarif'),
+    ({'status':'payment_required'},402,'Zahlung'),
+    ({'type':'payment_required'},402,'Zahlung'),
+    ({'status':'free_users_not_allowed','code':'bad_request'},400,'kostenlosen Tarif'),
+    ({'code':'invalid_voice_id'},400,'Voice-ID'),
+    ({'status':['invalid']},402,'Zahlung'),
+])
+async def test_preview_understands_old_and_new_provider_error_formats(monkeypatch,detail,status,expected):
+    import app.providers as providers
+    from app.errors import ServiceError
+    original=httpx.AsyncClient
+    detail['message']='private-provider-body'
+    monkeypatch.setattr(providers.httpx,'AsyncClient',lambda **kwargs:original(
+        transport=httpx.MockTransport(lambda request:httpx.Response(status,json={'detail':detail}))))
+    with pytest.raises(ServiceError) as exc:
+        await voice_preview(Settings(_env_file=None,elevenlabs_api_key='test-key'),AgentConfig(voice_id='abc'))
+    assert exc.value.status==422 and not exc.value.retryable
+    assert expected in exc.value.message
+    assert 'private' not in exc.value.message

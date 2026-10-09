@@ -7,6 +7,8 @@ Browserbasierter Startup-Interview-Agent mit React, FastAPI, LiveKit, Deepgram, 
 - [Demo-Guide](docs/DEMO_GUIDE.md): Präsentationsablauf, Beispielgespräch, Ergebnisbewertung und Fallback.
 - [Technischer Guide](docs/TECHNICAL_GUIDE.md): Einrichtung, Architektur, Konfiguration, Betrieb, Tests und Fehlerbehebung.
 
+- [Code study path](docs/learning/README.md): separate backend and frontend deep dives, reading order, interview questions and executable Python notebooks.
+
 ## Schnellstart unter Windows
 
 Voraussetzungen: Python 3.11+, Node.js (empfohlen 22.22+), Mikrofon und ein aktueller Browser. Mikrofonzugriff benötigt localhost oder HTTPS.
@@ -29,7 +31,7 @@ Für die laufende Frontend-Entwicklung: `npm run dev` im Ordner `frontend`; `PUB
 
 1. `.env.example` nach `.env` kopieren.
 2. LiveKit-Projekt erstellen und `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` setzen.
-3. `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` setzen. Diese APIs werden getrennt nach Nutzung abgerechnet.
+3. `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` und den Key für den gewählten STT-Anbieter setzen (standardmäßig `DEEPGRAM_API_KEY`, siehe unten). Diese APIs werden getrennt nach Nutzung abgerechnet.
 4. `SESSION_SECRET` und `WORKER_SECRET` mit zwei unabhängig generierten Zufallswerten setzen. Beispiel: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
 5. Optional `ADMIN_PASSWORD` setzen; dann sind die lokalen passwortlosen Vorschauzugänge deaktiviert. Founder erhalten Einladungslinks aus dem Admin-Bereich.
 6. API neu starten. Im Admin-Bereich eine gültige ElevenLabs Voice-ID aus deinem Account eintragen und die Konfiguration veröffentlichen. Die Hörprobe nutzt die echte API und ist kostenpflichtig.
@@ -43,6 +45,20 @@ Für die laufende Frontend-Entwicklung: `npm run dev` im Ordner `frontend`; `PUB
 Der Download lädt lokale Modelle für Sprachaktivität/Gesprächsenden. Er benötigt keine kostenpflichtige Voice-Sitzung. Danach im Browser anmelden, Mikrofon testen und Interview starten. Der Worker und die API müssen dieselben LiveKit- und Worker-Zugangsdaten verwenden. Keine API-Schlüssel im Browser oder in Git speichern.
 
 Voice wird nur angeboten, wenn die erforderlichen Einstellungen vorliegen. Das ist eine Konfigurationsprüfung, kein Nachweis gültiger Schlüssel oder eines laufenden Workers. Ohne Worker meldet die Oberfläche nach 30 Sekunden einen Verbindungsfehler.
+
+## Spracherkennung auswählen
+
+Die Factory `voice/stt.py:create_stt` liefert für beide Anbieter ein `livekit.agents.stt.STT`-Objekt. Streaming, Transkript-Ereignisse und Fehlerbehandlung nutzen dadurch dieselbe Schnittstelle; ein zusätzlicher Wrapper ist nicht nötig.
+
+In `.env` wählen:
+
+```dotenv
+STT_PROVIDER=deepgram
+```
+
+Deepgram Nova-3 bleibt der Standard und benötigt `DEEPGRAM_API_KEY`. Für ElevenLabs Scribe v2 Realtime stattdessen `STT_PROVIDER=elevenlabs` setzen. Dann wird `ELEVENLABS_API_KEY` für Spracherkennung und Sprachausgabe verwendet; der Key benötigt beide Berechtigungen. Optional kann `ELEVENLABS_STT_API_KEY` einen separaten Key nur für Spracherkennung enthalten. Ein Deepgram-Key ist bei dieser Auswahl nicht erforderlich.
+
+API und Worker nach Änderungen neu starten; beide müssen dieselbe Anbieterauswahl verwenden. Die Auswahl gilt für den Server und erfolgt aktuell nicht im Admin-UI. Es gibt keinen automatischen Anbieterwechsel bei Fehlern. Der Live-Check prüft den gewählten STT-Anbieter. Die ElevenLabs-STT-Anbindung ist offline gegen das installierte SDK getestet; ein echter Sprach- und Latenzvergleich steht noch aus.
 
 ## Bedienung
 
@@ -62,7 +78,7 @@ Nach dem Eintragen der geheimen API-Schlüssel (nicht deren Key-IDs) und der Voi
 .venv/Scripts/python -m scripts.voice_check --live
 ```
 
-Dieser ausdrücklich aktivierte Test verwendet echte APIs, einen kurzen fiktiven Startup-Satz, eine Sekunde Stille und eine kurze Hörprobe. Er kann Gebühren verursachen und gibt keine Schlüssel oder Provider-Antwortbodies aus. Er prüft OpenAI-Tool-Extraktion und Validierung, LiveKit-Authentifizierung, Deepgram-WebSocket und ElevenLabs-Audiostream. Fehlercodes unterscheiden z. B. Key-ID statt Secret, fehlende Berechtigung und erschöpftes Kontingent.
+Dieser ausdrücklich aktivierte Test verwendet echte APIs, einen kurzen fiktiven Startup-Satz, eine Sekunde Stille und eine kurze Hörprobe. Er kann Gebühren verursachen und gibt keine Schlüssel oder Provider-Antwortbodies aus. Er prüft OpenAI-Tool-Extraktion und Validierung, LiveKit-Authentifizierung, den WebSocket-Zugang des gewählten STT-Anbieters und ElevenLabs-Audiostream. Bei ElevenLabs-STT prüft er die authentifizierte Sitzung, nicht die Erkennungsqualität. Fehlercodes unterscheiden z. B. Key-ID statt Secret, fehlende Berechtigung und erschöpftes Kontingent.
 
 Die synthetische WAV-Datei lässt sich unter Windows mit `./scripts/make_voice_fixture.ps1` erstellen (installierte Stimme Microsoft Hedda Desktop). Sie enthält ausschließlich fiktive Testdaten.
 

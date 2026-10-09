@@ -120,6 +120,7 @@ class Metric(StrictModel):
 
 
 
+# Inject settings to isolate test databases and credentials from the local environment.
 def create_app(settings: Settings | None = None):
 
     settings = settings or Settings()
@@ -134,6 +135,7 @@ def create_app(settings: Settings | None = None):
 
     app.state.store, app.state.settings, app.state.auth = store, settings, auth
 
+    # Upgrade published settings; existing interviews retain their configuration snapshots.
     def migrate_config(old):
 
         if not old:
@@ -222,6 +224,7 @@ def create_app(settings: Settings | None = None):
 
 
 
+    # Hide the existence of records owned by another founder behind the same not-found response.
     def load(interview_id, user=None):
 
         data = store.get('interviews', interview_id)
@@ -234,6 +237,7 @@ def create_app(settings: Settings | None = None):
 
 
 
+    # Run state changes inside the repository transaction to avoid lost concurrent updates.
     def mutate_interview(interview_id, fn):
 
         def mutate(data):
@@ -372,8 +376,18 @@ def create_app(settings: Settings | None = None):
 
 
 
+    @app.post('/api/admin/config/validate')
+    def validate_config(body: AgentConfig, request: Request):
+        auth.admin(request)
+        if not {'name', 'goals', 'topics', 'voice_id'}.issubset(body.model_fields_set):
+            raise ServiceError('INVALID_CONFIG_FILE', 'Bitte eine vollständige gespeicherte Agent-Konfiguration laden.', 422)
+        # Imported files are drafts; publishing still uses optimistic concurrency.
+        return body.model_copy(update={'version': config().version})
+
+
     @app.put('/api/admin/config')
 
+    # Reject stale versions instead of silently overwriting another administrator's changes.
     def publish(body: AgentConfig, request: Request):
 
         auth.admin(request)
@@ -502,6 +516,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/interviews/{interview_id}/simulation-turn')
 
+    # The text simulator uses explicit classifications supplied by the user, not LLM inference.
     def simulation(interview_id: str, body: SimulationTurn, request: Request):
 
         item = load(interview_id, auth.user(request))
@@ -604,6 +619,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/internal/interviews/{interview_id}/turns')
 
+    # Return the canonical persisted state that the worker may safely speak from.
     def worker_turn(interview_id: str, body: Turn, request: Request):
 
         auth.worker(request)

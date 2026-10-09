@@ -2,14 +2,14 @@
 
 ## Datenfluss
 
-React Browser <-> LiveKit WebRTC <-> Python Agents Worker <-> Deepgram Streaming STT / OpenAI Text-LLM / ElevenLabs Streaming TTS.
+React Browser <-> LiveKit WebRTC <-> Python Agents Worker <-> Deepgram oder ElevenLabs Streaming STT / OpenAI Text-LLM / ElevenLabs Streaming TTS.
 React und Worker sprechen mit FastAPI. Die API hält Konfigurationsversionen, Gesprächszustand, Transkript und Ergebnisse in SQLite (lokal) bzw. Firestore (Cloud).
 
 Der Browser erhält ein kurzlebiges Token für genau einen Raum, eine Identität und die Mikrofonquelle. Er kann keine Geschäftsdaten über LiveKit-Datenpakete verändern. Die Zuordnung des Workers zum Interview erfolgt über vertrauenswürdige Room-Dispatch-Metadaten; der Worker prüft den Raumnamen und bindet die erlaubte Founder-Identität. Intern benötigt jede API-Anfrage das Worker-Geheimnis.
 
 ## Schnelle Sprachstrecke
 
-Eine dauerhafte WebRTC-Verbindung, Deepgram-Zwischentranskripte, lokales Silero VAD, lokaler LiveKit v1-mini Turn Detector und kontinuierliche TTS-Ausgabe. Unterbrechungen sind erlaubt; kurze Rückmeldungen werden durch Mindestsprechdauer/-wortzahl und Wiederaufnahme bei Fehlunterbrechung abgefedert. Kein Avatar, keine sequenzielle Audio-Datei-Konvertierung und kein Dialogflow.
+Eine dauerhafte WebRTC-Verbindung, STT-Zwischentranskripte, lokales Silero VAD, lokaler LiveKit v1-mini Turn Detector und kontinuierliche TTS-Ausgabe. Unterbrechungen sind erlaubt; kurze Rückmeldungen werden durch Mindestsprechdauer/-wortzahl und Wiederaufnahme bei Fehlunterbrechung abgefedert. Kein Avatar, keine sequenzielle Audio-Datei-Konvertierung und kein Dialogflow.
 
 Pro User-Turn ein begrenzter OpenAI-Tool-Aufruf (`record_interview_observations`) für belegte Fakten, deren Qualität und eine kurze natürliche Reaktion. Die API entscheidet deterministisch, ob eine Frage, die einzige Rückfrage, eine Zusammenfassung oder der Abschluss folgt. Der Worker reicht diesen Text direkt an Streaming-TTS weiter. Es gibt keinen zweiten Modellaufruf für die nächste Frage. Der Text wird derzeit erst nach vollständiger validierter Tool-Antwort ausgegeben; Audio wird gestreamt. Der Trade-off ist ein kontrollierterer, etwas stärker redaktionell geführter Dialog. Die individuelle Tonalität wirkt auf die generierte Reaktion, die festen Fragen werden im Admin-Bereich redaktionell gestaltet.
 
@@ -40,3 +40,13 @@ Gespeichert werden LLM-Tokenverbrauch und Controller-Laufzeit, STT-/TTS-/EOU-Met
 ## Bewusst später
 
 HeyGen, Websuche, automatische Investitionsentscheidungen, CRM, SSO, Wiederaufnahme abgebrochener Voice-Sitzungen und automatisierte Datenlöschfristen. Es gibt keine Investmentzusage und keine automatische Entscheidung über eine Finanzierung.
+
+## Austauschbare Spracherkennung
+
+`voice/stt.py:create_stt(settings, language=...) -> livekit.agents.stt.STT` kapselt die Anbieterauswahl. Beide installierten LiveKit-Plugins implementieren bereits dieselbe Streaming-Schnittstelle; die Factory liefert Deepgram Nova-3 oder ElevenLabs Scribe v2 Realtime. Der Worker kennt keine anbieterspezifischen STT-Aufrufe. Die Plugin-Implementierungen normalisieren Transkripte und Fehler für AgentSession.
+
+`STT_PROVIDER` ist eine serverweite Einstellung (Standard `deepgram`). Bei `elevenlabs` wird der gemeinsame `ELEVENLABS_API_KEY` oder bevorzugt `ELEVENLABS_STT_API_KEY` verwendet. TTS benötigt weiterhin `ELEVENLABS_API_KEY`. API und Worker müssen konsistent konfiguriert und nach Änderungen neu gestartet werden. Die Auswahl ist kein Bestandteil des Interview-Konfigurationssnapshots. Ungültige Anbieter werden abgewiesen; kein stiller Fallback.
+
+ElevenLabs verwendet Server-VAD mit 0,5 Sekunden Stille für finale Transkripte; LiveKits lokaler Turn Detector steuert weiterhin den Antwortbeginn. Provider-Logging ist deaktiviert, Füllwörter werden nicht gezielt entfernt. Die Factory baut pro Sitzung eine eigene Instanz; AgentSession verwaltet Streams und deren Schließung. Die bestehenden Voice-Abhängigkeiten reichen aus.
+
+Grundlage: [LiveKit ElevenLabs STT plugin](https://docs.livekit.io/agents/models/stt/elevenlabs/). Offline geprüft sind Auswahl, Sprachübergabe, Streaming-Fähigkeit, Schlüsselwahl und fehlende Konfiguration. Die Erkennungsqualität und Ende-zu-Ende-Latenz von ElevenLabs STT sind noch nicht live geprüft.

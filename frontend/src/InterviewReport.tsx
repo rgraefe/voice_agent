@@ -1,14 +1,19 @@
 import {useEffect,useState} from 'react';
 import {api,date,statusLabel,type Interview,type Report} from './api';
 const clock=(seconds:number)=>`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+// Defer URL revocation until the browser has had a chance to begin the download.
 function download(text:string,name:string,type:string){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+// Null means no usable score, not a score of zero; show a dash to preserve that distinction.
 function Gauge({value,label,caption}:{value:number|null;label:string;caption:string}){return <div className="card score-card"><div className="score-ring" style={{background:`conic-gradient(var(--accent, #39735c) ${(value??0)*3.6}deg, #e9ede6 0deg)`}}><div><strong>{value===null?'—':value}</strong>{value!==null&&<small>/ 100</small>}</div></div><h3>{label}</h3><p>{caption}</p></div>;}
 export function InterviewReport({item}:{item:Interview}){
  const [report,setReport]=useState<Report|null>(null),[error,setError]=useState(''),[search,setSearch]=useState(''),[speaker,setSpeaker]=useState('all');
+ // Ignore a request that finishes after the selected interview changes or the view unmounts.
  useEffect(()=>{let live=true;api<Report>('/interviews/'+item.id+'/analysis').then(r=>{if(live)setReport(r);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[item.id,item.transcript.length,item.status]);
  if(error)return <p role="alert">{error}</p>;if(!report)return <p>Auswertung wird geladen …</p>;
+ // Search and speaker filters affect presentation only, never the stored transcript or scoring.
  const transcript=report.transcript.filter(t=>(speaker==='all'||speaker===t.role)&&t.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
  const words=report.statistics.words,totalWords=words.user+words.assistant;
+ // Clear filters before scrolling so a referenced evidence entry is present in the rendered list.
  const evidence=(id:string|null)=>{setSearch('');setSpeaker('all');setTimeout(()=>{const el=document.getElementById('evidence-'+id);el?.scrollIntoView({behavior:'smooth',block:'center'});el?.focus({preventScroll:true});},0);};
  return <div className="report"><div className="page-heading"><div><span className="eyebrow">GESPRÄCHSERGEBNIS</span><h1>{item.goals?.startup_name?.value||'Euer Startup im Überblick.'}</h1><p>{date(item.created_at)} · {item.mode==='simulation'?'Text-Testlauf ohne KI':'Voice-Interview'} · {statusLabel[item.status]} · Konfiguration v{report.configuration_version}</p></div><button className="secondary" onClick={()=>download(JSON.stringify(report,null,2),'interview-'+item.id+'.json','application/json')}>Ergebnis herunterladen</button></div>
  {report.legacy&&<div className="banner">Dieses Gespräch stammt aus dem bisherigen Themenleitfaden. Eine nachträgliche Match-Bewertung wird nicht erfunden.</div>}
