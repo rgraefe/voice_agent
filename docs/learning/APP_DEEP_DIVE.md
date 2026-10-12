@@ -4,33 +4,271 @@ The Python system has two running services. `app/` is the authoritative HTTP bac
 
 ## 1. Map the data flow first
 
+The detailed sequence below follows a real **voice interview**, from opening the frontend to reopening its saved report. It shows one loop for all answer goals, including follow-ups and summary corrections. The participants are logical responsibilities: the planner and analysis functions run inside the API process, not in separate services.
+
+The diagram uses German labels to support the interview presentation. Download the editable [Mermaid source](diagrams/12-interview-full-sequence.mmd) to render it separately or use it for slides. The optional admin configuration phase is a prerequisite: the administrator publishes settings before the founder starts; each interview saves its own snapshot.
+
 ```mermaid
 sequenceDiagram
-    participant B as Browser
-    participant A as FastAPI
-    participant D as SQLite or Firestore
-    participant W as Voice worker
-    participant P as Speech and LLM providers
-    B->>A: Create interview
-    A->>D: Save state and config snapshot
-    A-->>B: Interview ID
-    B->>A: Request room token
-    A-->>B: Scoped LiveKit token
-    B->>W: Microphone audio through LiveKit
-    W->>P: Streaming STT
-    P-->>W: Recognized text
-    W->>P: One structured extraction call
-    P-->>W: Answers and evidence quotes
-    W->>A: Submit turn
-    A->>D: Atomic validation and planner update
-    A-->>W: Saved state and next reply
-    W->>P: Streaming TTS
-    P-->>B: Audio through worker and LiveKit
-    B->>A: Poll saved interview
-    A-->>B: Transcript and progress
+    autonumber
+    actor U as Startup / Gründer
+    participant F as React-Frontend / Browser
+    participant A as FastAPI / Auth
+    participant P as Interview / Planner / Analysis
+    participant D as SQLite / Firestore
+    participant L as LiveKit-Raum / WebRTC
+    participant W as Python Voice-Worker
+    participant S as Deepgram / ElevenLabs STT
+    participant M as OpenAI / Extractor
+    participant T as ElevenLabs TTS
+
+    Note over U,D: 1. Einstieg und Anmeldung — veröffentlichte Admin-Konfiguration existiert
+    U->>F: Seite öffnen (optional mit Einladungslink)
+    F->>A: GET /api/bootstrap
+    A->>D: Veröffentlichte Konfiguration lesen
+    D-->>A: Agentname, Sprache, Fragen, Stimme, Version
+    A-->>F: Sitzungsrolle, Agentinfos, voice_ready
+    Note over F,A: voice_ready prüft vorhandene Einstellungen, keinen Live-Zugang zum Anbieter
+    opt Noch keine gültige Sitzung
+        U->>F: Einladung einlösen / lokalen Startup-Zugang wählen
+        F->>A: POST /api/login
+        A->>A: Einladung oder erlaubten lokalen Zugang prüfen
+        A-->>F: Rolle und HttpOnly-Sitzungscookie
+        F->>A: GET /api/bootstrap
+        A-->>F: Angemeldeter Zustand
+    end
+    F->>A: GET /api/interviews
+    A->>D: Eigene Interviews laden (Admin darf alle sehen)
+    D-->>A: Interviewdaten
+    A-->>F: Historie mit Zeitstempeln und Status
+
+    opt Freiwilliger Mikrofontest vor dem Interview
+        U->>F: Mikrofon testen
+        F->>F: getUserMedia / Browserberechtigung
+        F->>F: AudioContext / AnalyserNode zeigt Eingangspegel
+        Note over F: Nur lokal, keine Aufnahme oder Übertragung an Anbieter
+        F->>F: Bei Stopp / Timeout / Navigation Tracks und AudioContext schließen
+    end
+
+    Note over U,W: 2. Interview anlegen, verbinden und erste Frage sprechen
+    U->>F: Interview starten
+    F->>A: POST /api/interviews (voice, eindeutige request_id)
+    A->>A: Sitzung und Voice-Konfiguration prüfen
+    A->>D: Aktuelle veröffentlichte Konfiguration lesen
+    D-->>A: AgentConfig mit Antwortzielen und Match-Profil
+    A->>D: Atomare Erstellung beginnen / vorhandene request_id prüfen
+    D-->>A: Existierendes Interview oder leerer Zustand
+    opt Neue request_id
+        A->>P: create_interview → create(owner, config, voice)
+        P->>P: GoalStates initialisieren, select_next, ask
+        P-->>A: Interview mit Begrüßung, erster Frage und Config-Snapshot
+    end
+    A->>D: Interview speichern / Transaktion abschließen
+    D-->>A: Gespeicherter Zustand
+    A-->>F: Interview mit ID und last_reply
+    F->>A: POST /api/interviews/{id}/connection
+    A->>D: Interview laden
+    D-->>A: Besitzer, Modus und Status
+    A->>A: Zugriff prüfen und kurzlebiges Raumtoken signieren
+    A-->>F: LiveKit-URL und Token mit Worker-Dispatch-Metadaten
+    F->>L: Room.connect(URL, Token)
+    L->>W: Job für founder-interviewer mit interview_id zuweisen
+    Note over L,W: Browser und Worker verbinden sich asynchron, nicht strikt nacheinander
+    W->>A: GET /api/internal/interviews/{id} mit Worker-Secret
+    A->>D: Interview laden
+    D-->>A: Gespeicherter Zustand und Konfiguration
+    A-->>W: Interview
+    W->>W: Raum-ID und Status prüfen, STT-Factory, Extractor und TTS konfigurieren
+    Note over W: Lokale VAD-/Turn-Detection-Modelle wurden im Prozess vorgewärmt
+    F->>F: startAudio, setMicrophoneEnabled(true)
+    F->>L: Mikrofontrack veröffentlichen
+    W->>L: ctx.connect und auf Founder-Teilnehmer warten
+    W->>W: AgentSession.start / on_enter
+    L-->>F: Agent verbunden, Remote-Audiotrack abonnieren
+    F->>F: Audiotrack an Wiedergabe anhängen, Agent-bereit anzeigen
+    Note over F,L: Kein Agent nach 30 s → Verbindung schließen und Interview stoppen
+    W->>T: session.say(last_reply): Begrüßung und erste Frage
+    T-->>W: Gestreamte Audioabschnitte
+    W-->>L: Agent-Audio veröffentlichen
+    L-->>F: Remote-Audio über WebRTC
+    F-->>U: Begrüßung und erste Frage hörbar
+    W->>A: POST /api/internal/interviews/{id}/speech
+    A->>D: Tatsächlich gesprochenen Beitrag nach ID speichern
+    D-->>A: Gespeichert
+    A-->>W: Kanonischer Zustand
+
+    Note over U,T: 3. Eine Schleife für alle Antworten, Rückfragen und die Abschlussprüfung
+    par Sprachdialog
+        loop Solange das Interview aktiv oder in review ist
+            U->>F: Antwort sprechen / Gegenfrage / Korrektur / Bestätigung
+            F->>L: Mikrofon-Audiostream
+            L->>W: Audio des Founders
+            W->>S: Streaming-Spracherkennung
+            S-->>W: Vorläufiger und finaler erkannter Text
+            W-->>L: Live-Transkriptionsereignisse über die Session
+            L-->>F: TranscriptionReceived: vorläufigen Text anzeigen
+            W->>W: VAD, Turn Detector und Pausenregel erkennen Sprechende
+            Note over W: Beim Startup-Namen mindestens 1,2 s Pause, sonst konfigurierte Pause
+            opt Founder unterbricht laufende Agent-Ausgabe
+                W->>W: LiveKit unterbricht die Sprachausgabe
+                W->>A: POST /speech (gesprochener Text, interrupted=true)
+                A->>D: Beitrag speichern, ggf. interrupted_question vormerken
+                A-->>W: Aktualisierter Interviewstand
+            end
+            W->>W: on_user_turn_completed / llm_node: turn_id und Text übernehmen
+            W->>M: extract(Text, Zustand): Ziele, Kriterien, bisherige Antworten, Tonalität
+            Note over W,M: Genau ein strukturierter Aufruf; keine Token-Streaming-Antwort
+            M-->>W: Extraction: answers, Belegzitate, acknowledgment, confirmed_summary
+            W->>W: Pydantic prüft die Struktur des Tool-Ergebnisses
+            W->>A: POST /api/internal/interviews/{id}/turns (Turn)
+            A->>A: Worker authentifizieren und Eingabe validieren
+            A->>D: Atomare Änderung beginnen, aktuellen Interviewstand lesen
+            D-->>A: Aktueller Zustand
+            A->>P: apply_turn → advance(interview, turn)
+            P->>P: ID / Inhalt, Status, Turn-Limit und alle Belege prüfen
+            Note over P: Identische Wiederholung ist wirkungslos, anderer Inhalt zur selben ID ist Konflikt
+            P->>P: Antworten und Korrekturen übernehmen, Nutzertranskript ergänzen
+            P->>P: applicability und select_next bestimmen nächste Aktion
+            alt Unterbrochene Frage muss wiederholt werden
+                P->>P: Frage wiederholen, kein zusätzliches Rückfragebudget verbrauchen
+            else Relevantes Antwortziel noch offen
+                P->>P: ask: erste Frage oder konfigurierte Rückfrage wählen
+                Note over P: Pflichtziele zuerst, geklärte Ziele überspringen, Rückfragen begrenzen
+            else Kein Ziel offen, aber noch keine reine Bestätigung
+                P->>P: status=review, spoken_summary und Bestätigungsfrage
+                Note over P: Neue Antworten/Korrekturen verhindern gleichzeitigen Abschluss
+            else In review ausdrücklich bestätigt, ohne neue Antworten
+                P->>P: status=completed, ended_at setzen, Abschlusstext wählen
+            end
+            P->>P: Themenübersicht, verarbeitete Turn-ID und Revision aktualisieren
+            P-->>A: Aktualisiertes Interview mit last_reply
+            A->>D: Änderungen atomar speichern
+            D-->>A: Commit erfolgreich
+            A-->>W: Kanonisch gespeichertes Interview
+            W->>W: Eigenen Zustand ersetzen, last_reply an TTS weitergeben
+            W->>T: Nächste Frage / Rückfrage / Zusammenfassung / Abschluss
+            T-->>W: Audio streamen
+            W-->>L: Agent-Audio
+            L-->>F: Audio und Sprecherstatus
+            F-->>U: Antwort hörbar, Sprechstatus sichtbar
+            W->>A: POST /speech für tatsächlich gesprochene Agent-Ausgabe
+            A->>D: Transkript nach ID aktualisieren, Zeitstempel erhalten
+            A-->>W: Gespeicherter Zustand
+            Note over W,A: Hintergrundcallbacks melden außerdem /metrics: LLM, STT, TTS, Latenz, Fehler
+        end
+    and Sichtbarer gespeicherter Verlauf
+        loop Alle 1,5 s, solange die Frontend-Verbindung nicht idle ist
+            F->>A: GET /api/interviews/{id}
+            A->>A: Sitzungsrolle und Besitzer prüfen
+            A->>D: Interview laden
+            D-->>A: Transkript, Antworten, Status und Fortschritt
+            A-->>F: Interview
+            F->>F: React-State aktualisieren, Verlauf und Fortschritt anzeigen
+        end
+    and Laufzeitüberwachung
+        loop Worker-Watchdog alle 2 s
+            W->>A: GET /api/internal/interviews/{id}
+            A->>D: Aktuellen Status lesen
+            D-->>A: Interview
+            A-->>W: Status
+            W->>W: completed / incomplete / konfigurierte Maximaldauer prüfen
+        end
+    end
+
+    Note over U,D: 4. Abschluss oder vorzeitiges Beenden
+    alt Regulär bestätigt und gespeichert
+        Note over A,D: completed und ended_at wurden bereits in der Turn-Transaktion gespeichert
+        W->>W: Watchdog erkennt completed, wartet 5 s für Abschlussaudio
+        W->>W: Session schließen
+        W->>A: POST /api/internal/interviews/{id}/stop
+        A->>P: stop_interview: completed bleibt completed
+        A->>D: Zustand speichern
+        A-->>W: Interview
+    else Startup klickt Gespräch beenden
+        U->>F: Stopp
+        F->>F: Mikrofontracks sofort stoppen
+        F->>L: Raumverbindung trennen
+        F->>A: POST /api/interviews/{id}/stop
+        A->>D: Interview und Berechtigung prüfen
+        A->>P: stop_interview: active/review → incomplete, ended_at setzen
+        A->>D: Antworten und Transkript erhalten, Status speichern
+        A->>L: Raum löschen (begrenzte Wartezeit)
+        A-->>F: Gespeichertes Interview
+        W->>W: Watchdog / Shutdown schließt Session
+    else Zeitlimit oder Verbindungs-/Verarbeitungsfehler
+        Note over W: Bei Zeitlimit Session schließen und /stop aufrufen
+        Note over W,A: Bei zwei aufeinanderfolgenden Verarbeitungsfehlern /stop versuchen
+        Note over F,A: Unerwartete Raumtrennung löst auch im Frontend /stop aus
+        Note over A,D: Erfolgreicher Stop setzt nur aktive/review Interviews auf incomplete
+    end
+    W->>W: Shutdown: Session schließen, ausstehende Speicheraufgaben abwarten
+    W->>A: Abschließender idempotenter POST /api/internal/interviews/{id}/stop
+    A->>D: Endzustand speichern
+    A-->>W: Interview
+    W->>W: Backend- und OpenAI-Client schließen
+    L-->>F: Disconnected (falls nicht bereits getrennt)
+    F->>F: Audioelemente entfernen, Verbindung idle, Live-Text leeren
+    Note over F,A: Bei unerwarteter Trennung lädt der /stop-Rückgabewert den Endzustand nach
+
+    Note over U,D: 5. Ergebnis, Transkript, Export und spätere Historie
+    U->>F: Auswertung und Transkript öffnen
+    F->>A: GET /api/interviews/{id}/analysis
+    A->>D: Interview mit ursprünglichem Config-Snapshot laden
+    D-->>A: Gespeicherte Antworten und Transkript
+    A->>P: analyze(interview)
+    P->>P: Vollständigkeit, Match, Coverage, Themenfortschritt und Statistiken berechnen
+    P-->>A: AnalysisReport mit Belegen und chronologischem Transkript
+    A-->>F: Bericht (kein zusätzlicher KI-Aufruf)
+    F-->>U: Kennzahlen, Grafiken, Antworten und durchsuchbares Transkript
+    opt Ergebnis herunterladen
+        F->>A: GET /api/interviews/{id}/export
+        A->>D: Autorisiertes Interview laden
+        A->>P: summary und analyze
+        A-->>F: Strukturierte Ergebnisdaten
+        F-->>U: JSON-Datei herunterladen
+    end
+    opt Gespräch später erneut öffnen
+        U->>F: Gesprächsverlauf öffnen
+        F->>A: GET /api/interviews
+        A->>D: Sichtbare Interviews nach Besitzer laden
+        A-->>F: Historie mit Zeitstempeln
+        U->>F: Ein Gespräch auswählen
+        F->>A: GET /api/interviews/{id}
+        A-->>F: Gespeichertes Interview
+        F->>A: GET /api/interviews/{id}/analysis
+        A-->>F: Erneut aus dem Snapshot berechneter Bericht
+    end
 ```
 
-STT means speech-to-text; TTS means text-to-speech. LiveKit transports media and manages the agent session. OpenAI interprets text. The planner chooses the question. The model is not given arbitrary database access.
+### How to read the parallel paths
+
+- **Audio:** Browser → LiveKit → worker → STT, then worker → TTS → LiveKit → browser. FastAPI does not carry the microphone or playback stream.
+- **State:** The worker submits the recognized text and extracted answers to FastAPI. The API loads the current state inside a storage transaction, invokes the planner, and commits before returning the reply that the worker may speak.
+- **Display:** Interim recognition comes through LiveKit events. The durable conversation, answers, and status come from the frontend's 1.5-second HTTP polling. The text display can therefore lag behind speech.
+- **Completion:** A summary confirmation is another turn through the same loop. Corrections require another review or further questions. Stopping capture alone marks an unfinished interview as `incomplete`.
+
+### Timing and failure details
+
+The `par` branches represent concurrent activities, not synchronized barriers. Watchdog, transcript callbacks, browser polling, and disconnect events may overlap. The diagram groups them for readability; exact event arrival order is not guaranteed. The worker schedules speech persistence in the background and drains outstanding tasks on shutdown.
+
+The 30-second frontend timer waits for the agent to join the room; it is **not** an answer timeout. The extractor uses a 7-second timeout with no automatic model retries. Worker-to-backend requests have an 8-second timeout and retry once after a network error or timeout with the same payload. If extraction or turn processing fails, the worker attempts to retain the user transcript and speaks a rotating retry phrase; after two consecutive failures, it attempts to stop the interview. If the backend is unreachable, it cannot guarantee that the final status was persisted. These failure messages bypass normal question selection and do not claim a successful write.
+
+The five-second wait on confirmed completion gives closing audio time to finish; it does not verify that the browser played the entire closing message. Silence by itself is not treated as an answer or confirmation. The configured maximum interview duration limits the session; there is no separate scripted “Are you still there?” silence timer.
+
+### Source pointers by phase
+
+| Phase | Frontend | Backend / worker |
+| --- | --- | --- |
+| Bootstrap, login, history | [App.tsx](../../frontend/src/App.tsx): `refresh`, `login`, effects | [main.py](../../app/main.py): `bootstrap`, `login`, `history`; [auth.py](../../app/auth.py) |
+| Local microphone test | [MicrophoneTest.tsx](../../frontend/src/MicrophoneTest.tsx) | No backend or provider request |
+| Create and connect | [App.tsx](../../frontend/src/App.tsx): `start`, room event handlers | [main.py](../../app/main.py): `start`, `connection`; [providers.py](../../app/providers.py): `room_access`; [worker.py](../../voice/worker.py): `entrypoint`, `on_enter` |
+| Recognize and interpret | LiveKit microphone track and interim transcription handler | [stt.py](../../voice/stt.py): `create_stt`; [worker.py](../../voice/worker.py): `endpointing_delay`, `llm_node`; [extraction.py](../../voice/extraction.py): `extract` |
+| Process one answer | Saved state displayed by polling | [main.py](../../app/main.py): `worker_turn`, `mutate_interview`; [interview.py](../../app/interview.py): `apply_turn`; [planner.py](../../app/planner.py): `advance`, `applicability`, `select_next`, `ask`, `spoken_summary`; [store.py](../../app/store.py): `update` |
+| Speech and evidence | Audio track attachment, speaker status, transcript UI | [worker.py](../../voice/worker.py): `conversation`, `spoken_message`, metric callbacks; [main.py](../../app/main.py): `worker_speech`, `worker_metrics` |
+| Stop and cleanup | [App.tsx](../../frontend/src/App.tsx): `stop`, disconnected handler | [worker.py](../../voice/worker.py): `watchdog`, `shutdown`; [main.py](../../app/main.py): `stop`, `worker_stop`; [interview.py](../../app/interview.py): `stop_interview` |
+| Report and export | [InterviewReport.tsx](../../frontend/src/InterviewReport.tsx), [App.tsx](../../frontend/src/App.tsx): `exportResult` | [main.py](../../app/main.py): `analysis`, `export`; [analysis.py](../../app/analysis.py): `analyze` |
+
+STT means speech-to-text; TTS means text-to-speech. The local text simulation skips LiveKit, STT, the LLM, and TTS: `sendSimulation()` submits explicit answer classifications to `/simulation-turn`, which invokes the same planner and storage transaction.
 
 ## 2. First files: goals and models
 
@@ -46,10 +284,16 @@ Example: `funding_amount` is a number in EUR, applies only when `fundraising` eq
 
 `AgentConfig` adds agent name, tone, language, voice settings, guidance, topics and the match profile. `unique_topics()` also invokes goal validation. `Interview` is the persisted aggregate: config snapshot, owner, states, transcript, metrics, revision and processed request IDs. `Turn` bundles original recognized text with proposed extraction. `TranscriptItem` represents a displayed contribution; its text may reflect a spoken interruption.
 
-`GoalExtraction` is the narrow schema sent to the model. `Extraction` also supports old topic-based fields for existing records. Do not conclude that those old fields are accepted by the current planner: it explicitly rejects them. `planner_version` defaults to 1 for old stored records; the new creation path explicitly selects 2.
+`Extraction` is the single schema shared by the model-facing tool and incoming turns: `answers`, `acknowledgment`, and `confirmed_summary`. Topics contain only a key and title; their displayed state is derived from goals. There is one controller for every interview, with no planner-version switch.
 
 ### Python concepts to recognize
 
+- Function signatures now name their input and output types. For example, `applicability(interview: Interview, goal: AnswerGoal) -> bool | None` receives a complete interview and one goal definition, and returns `True`, `False`, or `None`. Interview variables previously called `item` are now called `interview`.
+- `-> None` means a function returns no result; it may still modify the interview. `-> Interview` means the result is an interview, but does not imply that a new copy was created.
+- `Self` in a model validator means it returns the same model type. `Callable[[Interview], Interview]` describes a callback that receives and returns an interview. Async function annotations describe the result obtained after `await`; `AsyncIterator[str]` describes streamed text yielded by the worker.
+- [types.py](../../app/types.py) contains shared aliases: `TopicKey`, `InterviewMode`, and `Document`. `Document` is a heterogeneous dictionary used at storage/HTTP boundaries; its values intentionally use `Any`. It provides less static checking than a domain model, so incoming data still needs Pydantic validation.
+- `AnalysisReport` in [analysis.py](../../app/analysis.py) is a `TypedDict`: it describes a normal dictionary's keys and value types for the editor and type checker, without creating a new runtime report object. `InterviewBackend` and `AnswerExtractor` in [worker.py](../../voice/worker.py) are `Protocol` interfaces: real services and test doubles satisfy them by exposing the required methods.
+- `cast(...)` tells the type checker an already-established type; it does not convert or validate a value. `from __future__ import annotations` postpones annotation evaluation, allowing forward references. Neither annotation feature replaces runtime validation.
 - `Literal[...]` restricts values when Pydantic validates them; a type annotation alone in ordinary Python does not enforce that restriction.
 - `Field(default_factory=list)` creates a fresh list per instance. A shared mutable default would mix interview state.
 - `model_validator(mode='after')` checks relationships after individual fields have been parsed.
@@ -61,7 +305,7 @@ Run notebook 01 now. Interview question: “Why is a valid JSON response not nec
 
 ## 3. The deterministic planner
 
-Read [planner.py](../../app/planner.py) in this order: `applicability`, `select_next`, `ask`, `create`, `advance`, `spoken_summary`, `sync_topics`.
+First read [interview.py](../../app/interview.py): `create_interview`, `apply_turn`, and `summary` delegate directly to the planner; `stop_interview` marks unfinished conversations as incomplete. Then read [planner.py](../../app/planner.py) in this order: `applicability`, `select_next`, `ask`, `create`, `advance`, `spoken_summary`, `sync_topics`.
 
 `applicability()` returns three possible values. `True` means ask/evaluate the goal; `False` means the condition excludes it; `None` means the prerequisite is unresolved. Treating `None` as false would hide required questions and overstate completeness.
 
@@ -70,7 +314,7 @@ Read [planner.py](../../app/planner.py) in this order: `applicability`, `select_
 `advance()` is the most important function. Trace it in phases:
 
 1. Hash the serialized turn. If the ID was already processed with the same hash, return the current state. Reusing the ID with different content is a conflict.
-2. Reject a closed interview, excessive turns or legacy extraction fields.
+2. Reject a closed interview or excessive turns. Unexpected extraction fields are already rejected by Pydantic.
 3. Validate all answers before changing state: goal existence, enabled flag, unique goal keys, exact quote occurrence, and compatible typed values.
 4. Apply accepted answers. An isolated legal suffix cannot establish a full startup name or replace an existing name.
 5. Add the original recognized user contribution to the transcript if not already present.

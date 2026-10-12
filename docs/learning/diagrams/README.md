@@ -12,3 +12,7 @@ Mermaid sources for the demo storyline.
 9. [Design the startup interaction](09-design-the-startup-interaction.mmd)
 10. [Configure behavior and then refine presentation](10-configure-behavior-and-then-refine-presentation.mmd)
 11. [Close with the tradeoff](11-close-with-the-tradeoff.mmd)
+
+## Full interview sequence
+
+[12-interview-full-sequence.mmd](12-interview-full-sequence.mmd) expands the complete founder journey across React, FastAPI, planner, storage, LiveKit, worker, STT, LLM, and TTS. It includes the question loop, parallel polling/watchdog, review and stop paths, and reports. The same diagram is embedded in the [backend deep dive](../APP_DEEP_DIVE.md).

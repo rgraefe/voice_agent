@@ -1,3 +1,6 @@
+from __future__ import annotations
+from app.config import Settings
+from app.models import AgentConfig, Interview
 import asyncio
 import json
 from datetime import timedelta
@@ -6,20 +9,20 @@ from app.errors import ServiceError
 
 
 # Grant access to one interview room and microphone publication only; provider secrets stay on the server.
-async def room_access(settings, item):
+async def room_access(settings: Settings, interview: Interview) -> dict[str, str]:
     from livekit import api
     token = (api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
-             .with_identity(item.owner).with_name("Founder")
+             .with_identity(interview.owner).with_name("Founder")
              .with_ttl(timedelta(minutes=5))
-             .with_grants(api.VideoGrants(room_join=True, room="interview-" + item.id,
+             .with_grants(api.VideoGrants(room_join=True, room="interview-" + interview.id,
                                         can_publish=True, can_subscribe=True, can_publish_data=False,
                                         can_publish_sources=["microphone"]))
              .with_room_config(api.RoomConfiguration(agents=[api.RoomAgentDispatch(
-                 agent_name="founder-interviewer", metadata=json.dumps({"interview_id": item.id}) )])))
+                 agent_name="founder-interviewer", metadata=json.dumps({"interview_id": interview.id}) )])))
     return {"url": settings.livekit_url, "token": token.to_jwt()}
 
 
-async def close_room(settings, interview_id):
+async def close_room(settings: Settings, interview_id: str) -> bool:
     if not settings.livekit_api_key:
         return False
     from livekit import api
@@ -32,7 +35,7 @@ async def close_room(settings, interview_id):
         return False
 
 
-async def voice_preview(settings, config):
+async def voice_preview(settings: Settings, config: AgentConfig) -> bytes:
     if not settings.elevenlabs_api_key or not config.voice_id:
         raise ServiceError("VOICE_NOT_CONFIGURED", "ElevenLabs-Zugang und Voice-ID fehlen.", 503)
     text = (f"Hallo, ich bin {config.name}. Erzähl mir von deinem Startup. Was möchtet ihr verändern?"

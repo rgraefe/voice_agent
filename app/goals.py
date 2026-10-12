@@ -1,4 +1,7 @@
 """Versioned interview goal and match profile schemas, independent of voice providers."""
+from __future__ import annotations
+from typing import Self
+from app.types import TopicKey
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,7 +17,7 @@ class Condition(Schema):
 
 class AnswerGoal(Schema):
     key: str = Field(pattern=r'^[a-z][a-z0-9_]{0,49}$')
-    topic: Literal['startup','team','product','traction','market','funding','next_step']
+    topic: TopicKey
     label: str = Field(min_length=1, max_length=100)
     criteria: str = Field(min_length=10, max_length=1000)
     question: str = Field(min_length=10, max_length=500)
@@ -28,7 +31,7 @@ class AnswerGoal(Schema):
     condition: Condition | None = None
 
     @model_validator(mode='after')
-    def valid_type(self):
+    def valid_type(self) -> Self:
         if self.kind == 'choice':
             if len(self.choices) < 2 or any(not x.strip() or len(x)>100 for x in self.choices):
                 raise ValueError('Choice goals need 2–20 nonempty options')
@@ -50,7 +53,7 @@ class MatchRule(Schema):
     maximum: float | None = None
 
     @model_validator(mode='after')
-    def valid_rule(self):
+    def valid_rule(self) -> Self:
         if self.operator=='one_of' and (not self.accepted or self.minimum is not None or self.maximum is not None):
             raise ValueError('Choice rule needs accepted options and no numeric limits')
         if self.operator=='range':
@@ -90,7 +93,7 @@ class GoalState(Schema):
 
 
 def default_goals() -> list[AnswerGoal]:
-    rows = [
+    rows: list[tuple[str, TopicKey, str, str, str, str]] = [
       ('startup_name','startup','Startup-Name','Der Name des Startups ist eindeutig genannt.','Wie heißt euer Startup?','Unter welchem Namen tretet ihr auf?'),
       ('sector','startup','Sektor','Die Branche wird konkret genannt und einer Auswahl eindeutig zugeordnet.','In welcher Branche seid ihr tätig?','Welcher Branche würdest du euer Startup konkret zuordnen?'),
       ('problem','startup','Problem & Nutzen','Ein konkretes Kundenproblem und der Nutzen der Lösung sind benannt.','Welches Problem löst ihr für eure Kunden?','Kannst du ein konkretes Beispiel für dieses Kundenproblem nennen?'),
@@ -124,7 +127,7 @@ def default_goals() -> list[AnswerGoal]:
 
 
 # Cross-field checks keep conditions and scoring rules consistent with the configured answer types.
-def validate_goal_config(goals: list[AnswerGoal], profile: MatchProfile):
+def validate_goal_config(goals: list[AnswerGoal], profile: MatchProfile) -> None:
     by_key = {g.key:g for g in goals}
     if len(by_key)!=len(goals) or not any(g.enabled and g.required for g in goals):
         raise ValueError('Unique goal keys and at least one enabled required goal are needed')
@@ -140,10 +143,10 @@ def validate_goal_config(goals: list[AnswerGoal], profile: MatchProfile):
     if len({r.goal_key for r in profile.rules})!=len(profile.rules):
         raise ValueError('Only one match rule per goal is allowed')
     for rule in profile.rules:
-        goal=by_key.get(rule.goal_key)
-        if not goal:
+        rule_goal=by_key.get(rule.goal_key)
+        if not rule_goal:
             raise ValueError('Match rule references an unknown goal')
-        if rule.operator=='one_of' and (goal.kind!='choice' or not set(rule.accepted)<=set(goal.choices)):
+        if rule.operator=='one_of' and (rule_goal.kind!='choice' or not set(rule.accepted)<=set(rule_goal.choices)):
             raise ValueError('Match options must belong to the choice goal')
-        if rule.operator=='range' and goal.kind!='number':
+        if rule.operator=='range' and rule_goal.kind!='number':
             raise ValueError('Range rules require a number goal')

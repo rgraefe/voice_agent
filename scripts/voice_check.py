@@ -1,4 +1,7 @@
 """Explicit, bounded live-provider checks. Never prints secrets or provider response bodies."""
+from __future__ import annotations
+from collections.abc import Awaitable, Callable
+from app.types import Document
 import asyncio
 import json
 import logging
@@ -14,7 +17,7 @@ from app.models import AgentConfig, Turn
 from voice.extraction import Extractor
 
 # Bound each diagnostic independently and report sanitized metadata, never provider response text.
-async def check(name, operation):
+async def check(name: str, operation: Callable[[], Awaitable[Document]]) -> Document:
     started=time.perf_counter()
     try:
         details=await asyncio.wait_for(operation(),25)
@@ -24,10 +27,10 @@ async def check(name, operation):
         return {'provider':name,'ok':False,'error_type':type(exc).__name__,'status':status,'code':getattr(exc,'code',None),
                 'seconds':round(time.perf_counter()-started,3)}
 
-async def main(voice_id=None):
+async def main(voice_id: str | None=None) -> None:
     logging.disable(logging.CRITICAL)
     settings=Settings()
-    async def reasoning():
+    async def reasoning() -> Document:
         extractor=Extractor(settings.openai_api_key,settings.llm_model)
         try:
             state=create_interview('automated-provider-check',AgentConfig(),'voice')
@@ -39,11 +42,11 @@ async def main(voice_id=None):
             return {'structured_tool_valid':True,'next_goal':state.current_goal,**usage}
         finally:
             await extractor.client.close()
-    async def transport():
+    async def transport() -> Document:
         async with api.LiveKitAPI(settings.livekit_url,settings.livekit_api_key,settings.livekit_api_secret) as client:
             await client.room.list_rooms(api.ListRoomsRequest())
         return {'authenticated':True}
-    async def recognition():
+    async def recognition() -> Document:
         if settings.stt_provider == 'elevenlabs':
             key = settings.elevenlabs_stt_api_key or settings.elevenlabs_api_key
             async with aiohttp.ClientSession() as client:
@@ -71,7 +74,7 @@ async def main(voice_id=None):
                         if payload.get('type')=='Error':
                             raise RuntimeError('Provider rejected stream')
                 raise RuntimeError('No stream acknowledgement')
-    async def speech():
+    async def speech() -> Document:
         selected=voice_id
         if not selected and settings.persistence_backend=='sqlite':
             published=SqliteStore(settings.database_path).get('config','published')

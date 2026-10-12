@@ -27,7 +27,7 @@ Alle Browser-Schreibanfragen: `X-Requested-With: founder-app`, gleiche konfiguri
 
 ## Extraktion
 
-`Turn`: id, text, optional timestamp mit Zeitzone, extraction. Neue `Extraction`: answers, acknowledgment, confirmed_summary. Jede Antwort: goal_key, status (answered/partial/unknown), value, quote, optional number_value/choice_value. Exakte Zitate müssen im aktuellen Turn vorkommen; Ziele dürfen nur einmal vorkommen. Typisierte vollständige Antworten benötigen passende Werte. Legacy observations/facts werden nur für alte Interviews unterstützt. Das erzwungene Tool `record_interview_observations` schlägt Angaben vor; erst der atomare Backend-Commit bestätigt Speicherung.
+`Turn`: id, text, optional timestamp mit Zeitzone, extraction. `Extraction`: answers, acknowledgment, confirmed_summary. Jede Antwort: goal_key, status (answered/partial/unknown), value, quote, optional number_value/choice_value. Exakte Zitate müssen im aktuellen Turn vorkommen; Ziele dürfen nur einmal vorkommen. Typisierte vollständige Antworten benötigen passende Werte. Das erzwungene Tool `record_interview_observations` schlägt Angaben vor; erst der atomare Backend-Commit bestätigt Speicherung.
 
 `AgentConfig.goals`: key, topic, label, criteria, question, clarification, required, enabled, max_followups (0–3), kind, choices, unit, condition (goal_key, equals). `match_profile`: name, rules (goal_key, weight 1–10, operator one_of/range, accepted oder minimum/maximum). Referenzen, Typen, Reihenfolge der Bedingungen und Grenzen werden beim Publizieren validiert. Konfigurationsmigration ergänzt alte veröffentlichte Konfigurationen einmalig; existierende Interviews behalten ihre Snapshots.
 

@@ -1,0 +1,229 @@
+sequenceDiagram
+    autonumber
+    actor U as Startup / Gründer
+    participant F as React-Frontend / Browser
+    participant A as FastAPI / Auth
+    participant P as Interview / Planner / Analysis
+    participant D as SQLite / Firestore
+    participant L as LiveKit-Raum / WebRTC
+    participant W as Python Voice-Worker
+    participant S as Deepgram / ElevenLabs STT
+    participant M as OpenAI / Extractor
+    participant T as ElevenLabs TTS
+
+    Note over U,D: 1. Einstieg und Anmeldung — veröffentlichte Admin-Konfiguration existiert
+    U->>F: Seite öffnen (optional mit Einladungslink)
+    F->>A: GET /api/bootstrap
+    A->>D: Veröffentlichte Konfiguration lesen
+    D-->>A: Agentname, Sprache, Fragen, Stimme, Version
+    A-->>F: Sitzungsrolle, Agentinfos, voice_ready
+    Note over F,A: voice_ready prüft vorhandene Einstellungen, keinen Live-Zugang zum Anbieter
+    opt Noch keine gültige Sitzung
+        U->>F: Einladung einlösen / lokalen Startup-Zugang wählen
+        F->>A: POST /api/login
+        A->>A: Einladung oder erlaubten lokalen Zugang prüfen
+        A-->>F: Rolle und HttpOnly-Sitzungscookie
+        F->>A: GET /api/bootstrap
+        A-->>F: Angemeldeter Zustand
+    end
+    F->>A: GET /api/interviews
+    A->>D: Eigene Interviews laden (Admin darf alle sehen)
+    D-->>A: Interviewdaten
+    A-->>F: Historie mit Zeitstempeln und Status
+
+    opt Freiwilliger Mikrofontest vor dem Interview
+        U->>F: Mikrofon testen
+        F->>F: getUserMedia / Browserberechtigung
+        F->>F: AudioContext / AnalyserNode zeigt Eingangspegel
+        Note over F: Nur lokal, keine Aufnahme oder Übertragung an Anbieter
+        F->>F: Bei Stopp / Timeout / Navigation Tracks und AudioContext schließen
+    end
+
+    Note over U,W: 2. Interview anlegen, verbinden und erste Frage sprechen
+    U->>F: Interview starten
+    F->>A: POST /api/interviews (voice, eindeutige request_id)
+    A->>A: Sitzung und Voice-Konfiguration prüfen
+    A->>D: Aktuelle veröffentlichte Konfiguration lesen
+    D-->>A: AgentConfig mit Antwortzielen und Match-Profil
+    A->>D: Atomare Erstellung beginnen / vorhandene request_id prüfen
+    D-->>A: Existierendes Interview oder leerer Zustand
+    opt Neue request_id
+        A->>P: create_interview → create(owner, config, voice)
+        P->>P: GoalStates initialisieren, select_next, ask
+        P-->>A: Interview mit Begrüßung, erster Frage und Config-Snapshot
+    end
+    A->>D: Interview speichern / Transaktion abschließen
+    D-->>A: Gespeicherter Zustand
+    A-->>F: Interview mit ID und last_reply
+    F->>A: POST /api/interviews/{id}/connection
+    A->>D: Interview laden
+    D-->>A: Besitzer, Modus und Status
+    A->>A: Zugriff prüfen und kurzlebiges Raumtoken signieren
+    A-->>F: LiveKit-URL und Token mit Worker-Dispatch-Metadaten
+    F->>L: Room.connect(URL, Token)
+    L->>W: Job für founder-interviewer mit interview_id zuweisen
+    Note over L,W: Browser und Worker verbinden sich asynchron, nicht strikt nacheinander
+    W->>A: GET /api/internal/interviews/{id} mit Worker-Secret
+    A->>D: Interview laden
+    D-->>A: Gespeicherter Zustand und Konfiguration
+    A-->>W: Interview
+    W->>W: Raum-ID und Status prüfen, STT-Factory, Extractor und TTS konfigurieren
+    Note over W: Lokale VAD-/Turn-Detection-Modelle wurden im Prozess vorgewärmt
+    F->>F: startAudio, setMicrophoneEnabled(true)
+    F->>L: Mikrofontrack veröffentlichen
+    W->>L: ctx.connect und auf Founder-Teilnehmer warten
+    W->>W: AgentSession.start / on_enter
+    L-->>F: Agent verbunden, Remote-Audiotrack abonnieren
+    F->>F: Audiotrack an Wiedergabe anhängen, Agent-bereit anzeigen
+    Note over F,L: Kein Agent nach 30 s → Verbindung schließen und Interview stoppen
+    W->>T: session.say(last_reply): Begrüßung und erste Frage
+    T-->>W: Gestreamte Audioabschnitte
+    W-->>L: Agent-Audio veröffentlichen
+    L-->>F: Remote-Audio über WebRTC
+    F-->>U: Begrüßung und erste Frage hörbar
+    W->>A: POST /api/internal/interviews/{id}/speech
+    A->>D: Tatsächlich gesprochenen Beitrag nach ID speichern
+    D-->>A: Gespeichert
+    A-->>W: Kanonischer Zustand
+
+    Note over U,T: 3. Eine Schleife für alle Antworten, Rückfragen und die Abschlussprüfung
+    par Sprachdialog
+        loop Solange das Interview aktiv oder in review ist
+            U->>F: Antwort sprechen / Gegenfrage / Korrektur / Bestätigung
+            F->>L: Mikrofon-Audiostream
+            L->>W: Audio des Founders
+            W->>S: Streaming-Spracherkennung
+            S-->>W: Vorläufiger und finaler erkannter Text
+            W-->>L: Live-Transkriptionsereignisse über die Session
+            L-->>F: TranscriptionReceived: vorläufigen Text anzeigen
+            W->>W: VAD, Turn Detector und Pausenregel erkennen Sprechende
+            Note over W: Beim Startup-Namen mindestens 1,2 s Pause, sonst konfigurierte Pause
+            opt Founder unterbricht laufende Agent-Ausgabe
+                W->>W: LiveKit unterbricht die Sprachausgabe
+                W->>A: POST /speech (gesprochener Text, interrupted=true)
+                A->>D: Beitrag speichern, ggf. interrupted_question vormerken
+                A-->>W: Aktualisierter Interviewstand
+            end
+            W->>W: on_user_turn_completed / llm_node: turn_id und Text übernehmen
+            W->>M: extract(Text, Zustand): Ziele, Kriterien, bisherige Antworten, Tonalität
+            Note over W,M: Genau ein strukturierter Aufruf; keine Token-Streaming-Antwort
+            M-->>W: Extraction: answers, Belegzitate, acknowledgment, confirmed_summary
+            W->>W: Pydantic prüft die Struktur des Tool-Ergebnisses
+            W->>A: POST /api/internal/interviews/{id}/turns (Turn)
+            A->>A: Worker authentifizieren und Eingabe validieren
+            A->>D: Atomare Änderung beginnen, aktuellen Interviewstand lesen
+            D-->>A: Aktueller Zustand
+            A->>P: apply_turn → advance(interview, turn)
+            P->>P: ID / Inhalt, Status, Turn-Limit und alle Belege prüfen
+            Note over P: Identische Wiederholung ist wirkungslos, anderer Inhalt zur selben ID ist Konflikt
+            P->>P: Antworten und Korrekturen übernehmen, Nutzertranskript ergänzen
+            P->>P: applicability und select_next bestimmen nächste Aktion
+            alt Unterbrochene Frage muss wiederholt werden
+                P->>P: Frage wiederholen, kein zusätzliches Rückfragebudget verbrauchen
+            else Relevantes Antwortziel noch offen
+                P->>P: ask: erste Frage oder konfigurierte Rückfrage wählen
+                Note over P: Pflichtziele zuerst, geklärte Ziele überspringen, Rückfragen begrenzen
+            else Kein Ziel offen, aber noch keine reine Bestätigung
+                P->>P: status=review, spoken_summary und Bestätigungsfrage
+                Note over P: Neue Antworten/Korrekturen verhindern gleichzeitigen Abschluss
+            else In review ausdrücklich bestätigt, ohne neue Antworten
+                P->>P: status=completed, ended_at setzen, Abschlusstext wählen
+            end
+            P->>P: Themenübersicht, verarbeitete Turn-ID und Revision aktualisieren
+            P-->>A: Aktualisiertes Interview mit last_reply
+            A->>D: Änderungen atomar speichern
+            D-->>A: Commit erfolgreich
+            A-->>W: Kanonisch gespeichertes Interview
+            W->>W: Eigenen Zustand ersetzen, last_reply an TTS weitergeben
+            W->>T: Nächste Frage / Rückfrage / Zusammenfassung / Abschluss
+            T-->>W: Audio streamen
+            W-->>L: Agent-Audio
+            L-->>F: Audio und Sprecherstatus
+            F-->>U: Antwort hörbar, Sprechstatus sichtbar
+            W->>A: POST /speech für tatsächlich gesprochene Agent-Ausgabe
+            A->>D: Transkript nach ID aktualisieren, Zeitstempel erhalten
+            A-->>W: Gespeicherter Zustand
+            Note over W,A: Hintergrundcallbacks melden außerdem /metrics: LLM, STT, TTS, Latenz, Fehler
+        end
+    and Sichtbarer gespeicherter Verlauf
+        loop Alle 1,5 s, solange die Frontend-Verbindung nicht idle ist
+            F->>A: GET /api/interviews/{id}
+            A->>A: Sitzungsrolle und Besitzer prüfen
+            A->>D: Interview laden
+            D-->>A: Transkript, Antworten, Status und Fortschritt
+            A-->>F: Interview
+            F->>F: React-State aktualisieren, Verlauf und Fortschritt anzeigen
+        end
+    and Laufzeitüberwachung
+        loop Worker-Watchdog alle 2 s
+            W->>A: GET /api/internal/interviews/{id}
+            A->>D: Aktuellen Status lesen
+            D-->>A: Interview
+            A-->>W: Status
+            W->>W: completed / incomplete / konfigurierte Maximaldauer prüfen
+        end
+    end
+
+    Note over U,D: 4. Abschluss oder vorzeitiges Beenden
+    alt Regulär bestätigt und gespeichert
+        Note over A,D: completed und ended_at wurden bereits in der Turn-Transaktion gespeichert
+        W->>W: Watchdog erkennt completed, wartet 5 s für Abschlussaudio
+        W->>W: Session schließen
+        W->>A: POST /api/internal/interviews/{id}/stop
+        A->>P: stop_interview: completed bleibt completed
+        A->>D: Zustand speichern
+        A-->>W: Interview
+    else Startup klickt Gespräch beenden
+        U->>F: Stopp
+        F->>F: Mikrofontracks sofort stoppen
+        F->>L: Raumverbindung trennen
+        F->>A: POST /api/interviews/{id}/stop
+        A->>D: Interview und Berechtigung prüfen
+        A->>P: stop_interview: active/review → incomplete, ended_at setzen
+        A->>D: Antworten und Transkript erhalten, Status speichern
+        A->>L: Raum löschen (begrenzte Wartezeit)
+        A-->>F: Gespeichertes Interview
+        W->>W: Watchdog / Shutdown schließt Session
+    else Zeitlimit oder Verbindungs-/Verarbeitungsfehler
+        Note over W: Bei Zeitlimit Session schließen und /stop aufrufen
+        Note over W,A: Bei zwei aufeinanderfolgenden Verarbeitungsfehlern /stop versuchen
+        Note over F,A: Unerwartete Raumtrennung löst auch im Frontend /stop aus
+        Note over A,D: Erfolgreicher Stop setzt nur aktive/review Interviews auf incomplete
+    end
+    W->>W: Shutdown: Session schließen, ausstehende Speicheraufgaben abwarten
+    W->>A: Abschließender idempotenter POST /api/internal/interviews/{id}/stop
+    A->>D: Endzustand speichern
+    A-->>W: Interview
+    W->>W: Backend- und OpenAI-Client schließen
+    L-->>F: Disconnected (falls nicht bereits getrennt)
+    F->>F: Audioelemente entfernen, Verbindung idle, Live-Text leeren
+    Note over F,A: Bei unerwarteter Trennung lädt der /stop-Rückgabewert den Endzustand nach
+
+    Note over U,D: 5. Ergebnis, Transkript, Export und spätere Historie
+    U->>F: Auswertung und Transkript öffnen
+    F->>A: GET /api/interviews/{id}/analysis
+    A->>D: Interview mit ursprünglichem Config-Snapshot laden
+    D-->>A: Gespeicherte Antworten und Transkript
+    A->>P: analyze(interview)
+    P->>P: Vollständigkeit, Match, Coverage, Themenfortschritt und Statistiken berechnen
+    P-->>A: AnalysisReport mit Belegen und chronologischem Transkript
+    A-->>F: Bericht (kein zusätzlicher KI-Aufruf)
+    F-->>U: Kennzahlen, Grafiken, Antworten und durchsuchbares Transkript
+    opt Ergebnis herunterladen
+        F->>A: GET /api/interviews/{id}/export
+        A->>D: Autorisiertes Interview laden
+        A->>P: summary und analyze
+        A-->>F: Strukturierte Ergebnisdaten
+        F-->>U: JSON-Datei herunterladen
+    end
+    opt Gespräch später erneut öffnen
+        U->>F: Gesprächsverlauf öffnen
+        F->>A: GET /api/interviews
+        A->>D: Sichtbare Interviews nach Besitzer laden
+        A-->>F: Historie mit Zeitstempeln
+        U->>F: Ein Gespräch auswählen
+        F->>A: GET /api/interviews/{id}
+        A-->>F: Gespeichertes Interview
+        F->>A: GET /api/interviews/{id}/analysis
+        A-->>F: Erneut aus dem Snapshot berechneter Bericht
+    end
