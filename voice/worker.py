@@ -1,4 +1,14 @@
 """Run: python -m livekit.agents download-files; python -m voice.worker dev."""
+from __future__ import annotations
+from collections.abc import AsyncIterator, Coroutine
+from typing import Any, Never, Protocol, cast
+from app.types import Document
+from livekit.agents import JobProcess
+from livekit.agents.voice.agent import ModelSettings
+from livekit.agents.voice.events import (
+    AgentStateChangedEvent, ConversationItemAddedEvent, ErrorEvent,
+    MetricsCollectedEvent, UserStateChangedEvent,
+)
 from datetime import datetime, timezone
 import asyncio
 import json
@@ -12,7 +22,7 @@ from livekit.agents import Agent, AgentSession, AgentServer, JobContext, cli, ll
 from livekit.plugins import elevenlabs, silero
 
 from app.config import Settings
-from app.models import Interview, Turn
+from app.models import Extraction, Interview, Turn
 from voice.extraction import Extractor
 from voice.stt import create_stt
 
@@ -31,13 +41,13 @@ RETRY_MESSAGES = {
         'Sorry, something went wrong on my side. Would you mind repeating your answer?',
     ),
 }
-def endpointing_delay(state):
+def endpointing_delay(state: Interview) -> float:
     # Names often contain deliberate pauses between brand, activity and legal form.
     return max(state.config.pause_seconds, 1.2) if state.current_goal == 'startup_name' else state.config.pause_seconds
 
 
 # Load local inference models before assigning a conversation to this worker process.
-def prewarm(process):
+def prewarm(process: JobProcess) -> None:
     from livekit.local_inference import init_eot
     init_eot()
     process.userdata['vad'] = silero.VAD.load()
@@ -48,12 +58,12 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, ws_url=settings.li
 
 
 class Backend:
-    def __init__(self, interview_id):
+    def __init__(self, interview_id: str) -> None:
         self.client = httpx.AsyncClient(base_url=settings.backend_url,
             headers={'Authorization': 'Bearer ' + settings.worker_secret}, timeout=8)
         self.prefix = '/api/internal/interviews/' + interview_id
 
-    async def request(self, method, path='', payload=None):
+    async def request(self, method: str, path: str='', payload: Document | None=None) -> Document:
         # Retry identical requests only; backend IDs make writes idempotent.
         for attempt in range(2):
             try:
@@ -64,45 +74,57 @@ class Backend:
                 if attempt:
                     raise
                 await asyncio.sleep(0.15)
+        raise AssertionError("Retry loop must return or raise")
 
 
-def spoken_message(item):
+def spoken_message(item: object) -> Document | None:
     """LiveKit also emits non-message history events such as AgentHandoff."""
     if getattr(item, 'role', None) != 'assistant':
         return None
-    return {'id': item.id, 'text': item.text_content or '',
-            'timestamp': datetime.fromtimestamp(item.created_at, timezone.utc).isoformat(),
-            'interrupted': item.interrupted}
+    # Only assistant messages expose the speech fields; handoffs were excluded above.
+    message = cast(llm.ChatMessage, item)
+    return {'id': message.id, 'text': message.text_content or '',
+            'timestamp': datetime.fromtimestamp(message.created_at, timezone.utc).isoformat(),
+            'interrupted': message.interrupted}
 
 
 class ControllerModel(llm.LLM):
     """Enable LiveKit's pipeline lifecycle; Interviewer.llm_node owns the single API call."""
-    def chat(self, **kwargs):
+    def chat(self, **kwargs: Any) -> Never:
         raise RuntimeError('Use the interview agent llm_node')
 
 
+class InterviewBackend(Protocol):
+    """The worker needs this operation, not a specific HTTP client implementation."""
+    async def request(self, method: str, path: str = '', payload: Document | None = None) -> Document: ...
+
+
+class AnswerExtractor(Protocol):
+    async def extract(self, text: str, state: Interview) -> tuple[Extraction, dict[str, float]]: ...
+
+
 class Interviewer(Agent):
-    def __init__(self, state, backend, extractor):
+    def __init__(self, state: Interview, backend: InterviewBackend, extractor: AnswerExtractor) -> None:
         super().__init__(instructions='Conduct the configured interview. All speech comes from the validated interview controller.')
         self.state, self.backend, self.extractor = state, backend, extractor
         self.failures = 0
         self.retry_index = int(uuid4().hex, 16) % len(RETRY_MESSAGES['de'])
-        self.pending_turn = None
+        self.pending_turn: tuple[str, str] | None = None
 
-    def retry_message(self):
+    def retry_message(self) -> str:
         messages = RETRY_MESSAGES[self.state.config.language]
         message = messages[self.retry_index % len(messages)]
         # Keep rotating even when a successful answer resets the failure count.
         self.retry_index += 1
         return message
 
-    async def on_enter(self):
+    async def on_enter(self) -> None:
         await self.session.say(self.state.last_reply, allow_interruptions=True)
 
-    async def on_user_turn_completed(self, turn_ctx, new_message):
+    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         self.pending_turn = (new_message.id, new_message.text_content or '')
 
-    async def llm_node(self, chat_ctx, tools, model_settings):
+    async def llm_node(self, chat_ctx: llm.ChatContext | None, tools: list[llm.Tool], model_settings: ModelSettings | None) -> AsyncIterator[str]:
         messages = getattr(chat_ctx, 'items', [])
         latest = next((m for m in reversed(messages) if getattr(m, 'role', None) == 'user'), None)
         if latest is not None:
@@ -150,7 +172,7 @@ class Interviewer(Agent):
 
 
 @server.rtc_session(agent_name='founder-interviewer')
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: JobContext) -> None:
     interview_id = json.loads(ctx.job.metadata)['interview_id']
     if ctx.room.name != 'interview-' + interview_id:
         raise ValueError('Room/session mismatch')
@@ -162,7 +184,7 @@ async def entrypoint(ctx: JobContext):
     cfg = state.config
     extractor = Extractor(settings.openai_api_key, settings.llm_model)
     agent = Interviewer(state, backend, extractor)
-    session = AgentSession(
+    session: AgentSession[None] = AgentSession(
         stt=create_stt(settings, language=cfg.language),
         llm=ControllerModel(), vad=ctx.proc.userdata['vad'], turn_detection=inference.TurnDetector(version='v1-mini'),
         tts=elevenlabs.TTS(api_key=settings.elevenlabs_api_key, voice_id=cfg.voice_id, model=cfg.tts_model,
@@ -173,25 +195,25 @@ async def entrypoint(ctx: JobContext):
         allow_interruptions=True, min_interruption_duration=0.3, min_interruption_words=1,
         resume_false_interruption=True, preemptive_generation=False, use_tts_aligned_transcript=True)
     # Retain persistence tasks so shutdown can await outstanding callbacks.
-    tasks = set()
+    tasks: set[asyncio.Task[Document]] = set()
 
-    def schedule(coro):
+    def schedule(coro: Coroutine[Any, Any, Document]) -> None:
         task = asyncio.create_task(coro)
         tasks.add(task)
-        def done(t):
+        def done(t: asyncio.Task[Document]) -> None:
             tasks.discard(t)
             if not t.cancelled() and t.exception():
                 logging.getLogger('founder').warning('Background session event could not be persisted')
         task.add_done_callback(done)
 
     @session.on('conversation_item_added')
-    def conversation(event):
+    def conversation(event: ConversationItemAddedEvent) -> None:
         payload = spoken_message(event.item)
         if payload is not None:
             schedule(backend.request('POST', '/speech', payload))
 
     @session.on('metrics_collected')
-    def metrics(event):
+    def metrics(event: MetricsCollectedEvent) -> None:
         metric = event.metrics
         name = getattr(metric, 'type', '')
         kind = next((k for k in ('tts', 'stt', 'eou', 'llm') if k in name), None)
@@ -200,16 +222,16 @@ async def entrypoint(ctx: JobContext):
             values = {k: float(getattr(metric, k)) for k in fields if isinstance(getattr(metric, k, None), (int, float))}
             schedule(backend.request('POST', '/metrics', {'id': uuid4().hex, 'kind': kind, 'values': values}))
 
-    last_user_end = None
+    last_user_end: float | None = None
 
     @session.on('user_state_changed')
-    def user_state(event):
+    def user_state(event: UserStateChangedEvent) -> None:
         nonlocal last_user_end
         if event.old_state == 'speaking' and event.new_state != 'speaking':
             last_user_end = time.perf_counter()
 
     @session.on('agent_state_changed')
-    def agent_state(event):
+    def agent_state(event: AgentStateChangedEvent) -> None:
         nonlocal last_user_end
         if event.new_state == 'listening':
             session.update_options(endpointing_opts={'min_delay': endpointing_delay(agent.state)})
@@ -220,11 +242,11 @@ async def entrypoint(ctx: JobContext):
                 'values': {'speech_end_to_agent_speaking_seconds': delay}}))
 
     @session.on('error')
-    def error(event):
+    def error(event: ErrorEvent) -> None:
         schedule(backend.request('POST', '/metrics', {'id': uuid4().hex, 'kind': 'error', 'values': {'count': 1}}))
 
     # Observe server-side stops and duration limits even if the browser disconnects unexpectedly.
-    async def watchdog():
+    async def watchdog() -> None:
         deadline = time.monotonic() + cfg.max_minutes * 60
         while True:
             await asyncio.sleep(2)
@@ -243,7 +265,7 @@ async def entrypoint(ctx: JobContext):
                 return
 
     # Drain transcript and metric writes before closing the backend client they depend on.
-    async def shutdown():
+    async def shutdown() -> None:
         monitor.cancel()
         await session.aclose()
         if tasks:

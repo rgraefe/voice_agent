@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Self
 from typing import Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,7 +30,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     # Fail during startup rather than run a deployment with development security defaults.
-    def production_safety(self):
+    def production_safety(self) -> Self:
         if self.environment == "production":
             if any(len(v) < 32 for v in (self.session_secret, self.worker_secret, self.admin_password)):
                 raise ValueError("Production requires secrets of at least 32 characters")

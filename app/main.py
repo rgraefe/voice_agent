@@ -1,3 +1,8 @@
+from __future__ import annotations
+from collections.abc import Callable
+from starlette.middleware.base import RequestResponseEndpoint
+from app.analysis import AnalysisReport
+from app.types import Document
 from datetime import datetime, timezone
 
 from app.analysis import analyze
@@ -38,7 +43,7 @@ from app.errors import ServiceError
 
 from app.interview import apply_turn, create_interview, stop_interview, summary
 
-from app.models import AgentConfig, Extraction, Interview, Observation, StrictModel, TranscriptItem, Turn, now
+from app.models import AgentConfig, Extraction, Interview, StrictModel, TranscriptItem, Turn, now
 
 from app.providers import close_room, room_access, voice_preview
 
@@ -121,7 +126,7 @@ class Metric(StrictModel):
 
 
 # Inject settings to isolate test databases and credentials from the local environment.
-def create_app(settings: Settings | None = None):
+def create_app(settings: Settings | None = None) -> FastAPI:
 
     settings = settings or Settings()
 
@@ -135,30 +140,15 @@ def create_app(settings: Settings | None = None):
 
     app.state.store, app.state.settings, app.state.auth = store, settings, auth
 
-    # Upgrade published settings; existing interviews retain their configuration snapshots.
-    def migrate_config(old):
+    # Initialize once; publishing and interview snapshots retain their own versions.
+    def initialize_config(old: Document | None) -> Document:
+        return old or {'config': AgentConfig().model_dump(), 'versions': []}
 
-        if not old:
-
-            return {'config': AgentConfig().model_dump(), 'versions': []}
-
-        if 'goals' not in old['config']:
-
-            upgraded = AgentConfig.model_validate(old['config'])
-
-            upgraded.version += 1
-
-            return {'config': upgraded.model_dump(), 'versions': (old['versions'] + [old['config']])[-100:]}
-
-        return old
-
-    store.update('config', 'published', migrate_config)
-
-
+    store.update('config', 'published', initialize_config)
 
     @app.middleware('http')
 
-    async def boundary(request: Request, call_next):
+    async def boundary(request: Request, call_next: RequestResponseEndpoint) -> Response:
 
         if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and not request.url.path.startswith('/api/internal/'):
 
@@ -198,7 +188,7 @@ def create_app(settings: Settings | None = None):
 
     @app.exception_handler(ServiceError)
 
-    async def service_error(request, exc):
+    async def service_error(request: Request, exc: ServiceError) -> JSONResponse:
 
         return JSONResponse({'error': {'code': exc.code, 'message': exc.message, 'retryable': exc.retryable}}, status_code=exc.status)
 
@@ -206,26 +196,28 @@ def create_app(settings: Settings | None = None):
 
     @app.exception_handler(RequestValidationError)
 
-    async def validation_error(request, exc):
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
 
         return JSONResponse({'error': {'code': 'VALIDATION_ERROR', 'message': 'Bitte Eingaben und Wertebereiche prüfen.', 'retryable': False}}, status_code=422)
 
 
 
-    def local_demo(request):
+    def local_demo(request: Request) -> bool:
 
-        return settings.environment == 'development' and request.client and request.client.host in ('127.0.0.1', '::1', 'testclient')
+        return settings.environment == 'development' and request.client is not None and request.client.host in ('127.0.0.1', '::1', 'testclient')
 
 
 
-    def config():
+    def config() -> AgentConfig:
 
-        return AgentConfig.model_validate(store.get('config', 'published')['config'])
+        published = store.get('config', 'published')
+        assert published is not None  # Created by initialize_config during startup.
+        return AgentConfig.model_validate(published['config'])
 
 
 
     # Hide the existence of records owned by another founder behind the same not-found response.
-    def load(interview_id, user=None):
+    def load(interview_id: str, user: Document | None=None) -> Interview:
 
         data = store.get('interviews', interview_id)
 
@@ -238,9 +230,9 @@ def create_app(settings: Settings | None = None):
 
 
     # Run state changes inside the repository transaction to avoid lost concurrent updates.
-    def mutate_interview(interview_id, fn):
+    def mutate_interview(interview_id: str, fn: Callable[[Interview], Interview]) -> Document:
 
-        def mutate(data):
+        def mutate(data: Document | None) -> Document:
 
             if not data:
 
@@ -252,17 +244,17 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.get('/api/health')
+    @app.get('/api/health', response_model=None)
 
-    def health():
+    def health() -> dict[str, str]:
 
         return {'status': 'ok'}
 
 
 
-    @app.get('/api/bootstrap')
+    @app.get('/api/bootstrap', response_model=None)
 
-    def bootstrap(request: Request):
+    def bootstrap(request: Request) -> Document:
 
         try:
 
@@ -286,9 +278,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/login')
+    @app.post('/api/login', response_model=None)
 
-    def login(body: Login, request: Request, response: Response):
+    def login(body: Login, request: Request, response: Response) -> dict[str, str]:
 
         if body.demo_role:
 
@@ -314,7 +306,7 @@ def create_app(settings: Settings | None = None):
 
             key = fingerprint(request.client.host if request.client else 'unknown')
 
-            def attempt(old):
+            def attempt(old: Document | None) -> Document:
 
                 old = old or {'count': 0, 'until': time.time() + 300}
 
@@ -344,9 +336,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/logout')
+    @app.post('/api/logout', response_model=None)
 
-    def logout(response: Response):
+    def logout(response: Response) -> dict[str, bool]:
 
         response.delete_cookie('founder_session')
 
@@ -354,9 +346,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/admin/invites')
+    @app.post('/api/admin/invites', response_model=None)
 
-    def invite(request: Request):
+    def invite(request: Request) -> Document:
 
         auth.admin(request)
 
@@ -366,9 +358,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.get('/api/admin/config')
+    @app.get('/api/admin/config', response_model=None)
 
-    def get_config(request: Request):
+    def get_config(request: Request) -> AgentConfig:
 
         auth.admin(request)
 
@@ -376,8 +368,8 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/admin/config/validate')
-    def validate_config(body: AgentConfig, request: Request):
+    @app.post('/api/admin/config/validate', response_model=None)
+    def validate_config(body: AgentConfig, request: Request) -> AgentConfig:
         auth.admin(request)
         if not {'name', 'goals', 'topics', 'voice_id'}.issubset(body.model_fields_set):
             raise ServiceError('INVALID_CONFIG_FILE', 'Bitte eine vollständige gespeicherte Agent-Konfiguration laden.', 422)
@@ -385,14 +377,16 @@ def create_app(settings: Settings | None = None):
         return body.model_copy(update={'version': config().version})
 
 
-    @app.put('/api/admin/config')
+    @app.put('/api/admin/config', response_model=None)
 
     # Reject stale versions instead of silently overwriting another administrator's changes.
-    def publish(body: AgentConfig, request: Request):
+    def publish(body: AgentConfig, request: Request) -> Document:
 
         auth.admin(request)
 
-        def change(old):
+        def change(old: Document | None) -> Document:
+
+            assert old is not None  # Published configuration exists after startup.
 
             if body.version != old['config']['version']:
 
@@ -406,9 +400,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/admin/voice-preview')
+    @app.post('/api/admin/voice-preview', response_model=None)
 
-    async def preview(body: AgentConfig, request: Request):
+    async def preview(body: AgentConfig, request: Request) -> Response:
 
         auth.admin(request)
 
@@ -418,9 +412,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.get('/api/interviews')
+    @app.get('/api/interviews', response_model=None)
 
-    def history(request: Request):
+    def history(request: Request) -> list[Document]:
 
         user = auth.user(request)
 
@@ -428,15 +422,15 @@ def create_app(settings: Settings | None = None):
 
         return sorted([{'id': r['id'], 'created_at': r['created_at'], 'status': r['status'], 'mode': r['mode'],
 
-                        'title': r.get('goals', {}).get('startup_name', {}).get('value') or r['topics']['startup']['value'] or 'Neues Startup',
+                        'title': r.get('goals', {}).get('startup_name', {}).get('value') or 'Neues Startup',
 
                         'config_version': r['config']['version']} for r in records], key=lambda r: r['created_at'], reverse=True)[:100]
 
 
 
-    @app.post('/api/interviews')
+    @app.post('/api/interviews', response_model=None)
 
-    def start(body: Start, request: Request):
+    def start(body: Start, request: Request) -> Document:
 
         user = auth.user(request)
 
@@ -452,7 +446,7 @@ def create_app(settings: Settings | None = None):
 
         interview_id = uuid5(NAMESPACE_URL, user['sub'] + ':' + body.request_id).hex
 
-        def create(old):
+        def create(old: Document | None) -> Document:
 
             if old:
 
@@ -462,51 +456,51 @@ def create_app(settings: Settings | None = None):
 
                 return old
 
-            item = create_interview(user['sub'], cfg, body.mode)
+            interview = create_interview(user['sub'], cfg, body.mode)
 
-            item.id = interview_id
+            interview.id = interview_id
 
             if body.mode == 'simulation':
 
-                item.transcript.append(TranscriptItem(id='greeting', role='assistant', text=item.last_reply))
+                interview.transcript.append(TranscriptItem(id='greeting', role='assistant', text=interview.last_reply))
 
-            return item.model_dump()
+            return interview.model_dump()
 
         return store.update('interviews', interview_id, create)
 
 
 
-    @app.get('/api/interviews/{interview_id}')
+    @app.get('/api/interviews/{interview_id}', response_model=None)
 
-    def detail(interview_id: str, request: Request):
+    def detail(interview_id: str, request: Request) -> Interview:
 
         return load(interview_id, auth.user(request))
 
 
 
-    @app.post('/api/interviews/{interview_id}/connection')
+    @app.post('/api/interviews/{interview_id}/connection', response_model=None)
 
-    async def connection(interview_id: str, request: Request):
+    async def connection(interview_id: str, request: Request) -> dict[str, str]:
 
-        item = await run_in_threadpool(load, interview_id, auth.user(request))
+        interview = await run_in_threadpool(load, interview_id, auth.user(request))
 
-        if item.mode != 'voice' or item.status not in ('active', 'review'):
+        if interview.mode != 'voice' or interview.status not in ('active', 'review'):
 
             raise ServiceError('INVALID_STATE', 'Dieses Gespräch kann nicht verbunden werden.', 409)
 
-        return await room_access(settings, item)
+        return await room_access(settings, interview)
 
 
 
-    @app.post('/api/interviews/{interview_id}/stop')
+    @app.post('/api/interviews/{interview_id}/stop', response_model=None)
 
-    async def stop(interview_id: str, request: Request):
+    async def stop(interview_id: str, request: Request) -> Document:
 
-        item = await run_in_threadpool(load, interview_id, auth.user(request))
+        interview = await run_in_threadpool(load, interview_id, auth.user(request))
 
         result = await run_in_threadpool(mutate_interview, interview_id, stop_interview)
 
-        if item.mode == 'voice':
+        if interview.mode == 'voice':
 
             await close_room(settings, interview_id)
 
@@ -514,18 +508,18 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/interviews/{interview_id}/simulation-turn')
+    @app.post('/api/interviews/{interview_id}/simulation-turn', response_model=None)
 
     # The text simulator uses explicit classifications supplied by the user, not LLM inference.
-    def simulation(interview_id: str, body: SimulationTurn, request: Request):
+    def simulation(interview_id: str, body: SimulationTurn, request: Request) -> Document:
 
-        item = load(interview_id, auth.user(request))
+        interview = load(interview_id, auth.user(request))
 
-        if not local_demo(request) or item.mode != 'simulation':
+        if not local_demo(request) or interview.mode != 'simulation':
 
             raise ServiceError('FORBIDDEN', 'Keine Simulationssitzung.', 403)
 
-        def update(current):
+        def update(current: Interview) -> Interview:
 
             digest = fingerprint(body.model_dump_json())
 
@@ -537,37 +531,21 @@ def create_app(settings: Settings | None = None):
 
                 return current
 
-            observations = []
-
-            if current.current_topic:
-
-                observations = [Observation(topic=current.current_topic, value=body.text, quote=body.text, quality='clear' if body.clear else 'vague')]
-
-            answers = []
-
-            if current.planner_version == 2:
-
-                key = body.goal_key or current.current_goal
-
-                if key and not body.confirm:
-
-                    goal = next((g for g in current.config.goals if g.key == key), None)
-
-                    if not goal:
-
-                        raise ServiceError('INVALID_ANSWER', 'Unbekanntes Antwortziel.', 422)
-
-                    choice = body.choice_value or (body.text if body.text in goal.choices else None)
-
-                    answers = [GoalAnswer(goal_key=key, value=body.text, quote=body.text,
-
-                                          status=body.answer_status or ('answered' if body.clear else 'partial'),
-
-                                          choice_value=choice, number_value=body.number_value)]
-
-                observations = []
-
-            turn = Turn(id=body.id, text=body.text, extraction=Extraction(answers=answers, observations=observations, confirmed_summary=body.confirm))
+            answers: list[GoalAnswer] = []
+            key = body.goal_key or current.current_goal
+            if key and not body.confirm:
+                goal = next((g for g in current.config.goals if g.key == key), None)
+                if not goal:
+                    raise ServiceError('INVALID_ANSWER', 'Unbekanntes Antwortziel.', 422)
+                choice = body.choice_value or (body.text if body.text in goal.choices else None)
+                answers = [GoalAnswer(
+                    goal_key=key, value=body.text, quote=body.text,
+                    status=body.answer_status or ('answered' if body.clear else 'partial'),
+                    choice_value=choice, number_value=body.number_value,
+                )]
+            turn = Turn(id=body.id, text=body.text, extraction=Extraction(
+                answers=answers, confirmed_summary=body.confirm,
+            ))
 
             current = apply_turn(current, turn)
 
@@ -583,33 +561,33 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.get('/api/interviews/{interview_id}/analysis')
+    @app.get('/api/interviews/{interview_id}/analysis', response_model=None)
 
-    def analysis(interview_id: str, request: Request):
+    def analysis(interview_id: str, request: Request) -> AnalysisReport:
 
         return analyze(load(interview_id, auth.user(request)))
 
 
 
-    @app.get('/api/interviews/{interview_id}/export')
+    @app.get('/api/interviews/{interview_id}/export', response_model=None)
 
-    def export(interview_id: str, request: Request):
+    def export(interview_id: str, request: Request) -> Document:
 
-        item = load(interview_id, auth.user(request))
+        interview = load(interview_id, auth.user(request))
 
-        return {'id': item.id, 'status': item.status, 'created_at': item.created_at,
+        return {'id': interview.id, 'status': interview.status, 'created_at': interview.created_at,
 
-                'configuration_version': item.config.version, 'summary': summary(item),
+                'configuration_version': interview.config.version, 'summary': summary(interview),
 
-                'facts': item.facts, 'topics': item.topics, 'transcript': item.transcript, 'analysis': analyze(item),
+                'goals': interview.goals, 'topics': interview.topics, 'transcript': interview.transcript, 'analysis': analyze(interview),
 
-                'open_topics': [k for k, v in item.topics.items() if v.status != 'clear']}
+                'open_topics': [k for k, v in interview.topics.items() if v.status != 'clear']}
 
 
 
-    @app.get('/api/internal/interviews/{interview_id}')
+    @app.get('/api/internal/interviews/{interview_id}', response_model=None)
 
-    def worker_detail(interview_id: str, request: Request):
+    def worker_detail(interview_id: str, request: Request) -> Interview:
 
         auth.worker(request)
 
@@ -617,70 +595,66 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/internal/interviews/{interview_id}/turns')
+    @app.post('/api/internal/interviews/{interview_id}/turns', response_model=None)
 
     # Return the canonical persisted state that the worker may safely speak from.
-    def worker_turn(interview_id: str, body: Turn, request: Request):
+    def worker_turn(interview_id: str, body: Turn, request: Request) -> Document:
 
         auth.worker(request)
 
-        return mutate_interview(interview_id, lambda item: apply_turn(item, body))
+        return mutate_interview(interview_id, lambda interview: apply_turn(interview, body))
 
 
 
-    @app.post('/api/internal/interviews/{interview_id}/speech')
+    @app.post('/api/internal/interviews/{interview_id}/speech', response_model=None)
 
-    def worker_speech(interview_id: str, body: Speech, request: Request):
+    def worker_speech(interview_id: str, body: Speech, request: Request) -> Document:
 
         auth.worker(request)
 
-        def record(item):
+        def record(interview: Interview) -> Interview:
 
-            if body.role == 'assistant' and body.interrupted and item.current_topic:
+            if body.role == 'assistant' and body.interrupted and interview.current_topic:
 
-                topic = next(t for t in item.config.topics if t.key == item.current_topic)
-
-                state = item.topics[item.current_topic]
-
-                expected = item.current_prompt if item.planner_version == 2 else (topic.clarification if state.clarification_used else topic.question)
+                expected = interview.current_prompt
 
                 if expected not in body.text:
 
-                    item.interrupted_question = expected
+                    interview.interrupted_question = expected
 
-            existing = next((t for t in item.transcript if t.id == body.id), None)
+            existing = next((t for t in interview.transcript if t.id == body.id), None)
 
             if existing and existing.role != body.role:
 
                 raise ServiceError('IDEMPOTENCY_CONFLICT', 'Sprecher einer Nachricht darf nicht geändert werden.', 409)
 
-            item.transcript = [t for t in item.transcript if t.id != body.id]
+            interview.transcript = [t for t in interview.transcript if t.id != body.id]
 
             if body.text:
 
-                item.transcript.append(TranscriptItem(id=body.id, role=body.role, text=body.text, interrupted=body.interrupted, timestamp=existing.timestamp if existing else (body.timestamp.astimezone(timezone.utc).isoformat() if body.timestamp else now())))
+                interview.transcript.append(TranscriptItem(id=body.id, role=body.role, text=body.text, interrupted=body.interrupted, timestamp=existing.timestamp if existing else (body.timestamp.astimezone(timezone.utc).isoformat() if body.timestamp else now())))
 
-            item.transcript.sort(key=lambda t: datetime.fromisoformat(t.timestamp))
+            interview.transcript.sort(key=lambda t: datetime.fromisoformat(t.timestamp))
 
-            return item
+            return interview
 
         return mutate_interview(interview_id, record)
 
 
 
-    @app.post('/api/internal/interviews/{interview_id}/metrics')
+    @app.post('/api/internal/interviews/{interview_id}/metrics', response_model=None)
 
-    def worker_metrics(interview_id: str, body: Metric, request: Request):
+    def worker_metrics(interview_id: str, body: Metric, request: Request) -> dict[str, bool]:
 
         auth.worker(request)
 
-        def record(item):
+        def record(interview: Interview) -> Interview:
 
-            if not any(m['id'] == body.id for m in item.metrics):
+            if not any(m['id'] == body.id for m in interview.metrics):
 
-                item.metrics = (item.metrics + [body.model_dump()])[-300:]
+                interview.metrics = (interview.metrics + [body.model_dump()])[-300:]
 
-            return item
+            return interview
 
         mutate_interview(interview_id, record)
 
@@ -688,9 +662,9 @@ def create_app(settings: Settings | None = None):
 
 
 
-    @app.post('/api/internal/interviews/{interview_id}/stop')
+    @app.post('/api/internal/interviews/{interview_id}/stop', response_model=None)
 
-    def worker_stop(interview_id: str, request: Request):
+    def worker_stop(interview_id: str, request: Request) -> Document:
 
         auth.worker(request)
 
@@ -704,9 +678,9 @@ def create_app(settings: Settings | None = None):
 
         app.mount('/assets', StaticFiles(directory=dist / 'assets'), name='assets')
 
-        @app.get('/')
+        @app.get('/', response_model=None)
 
-        def index():
+        def index() -> FileResponse:
 
             return FileResponse(dist / 'index.html')
 

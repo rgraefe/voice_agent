@@ -38,7 +38,7 @@ Open a completed interview report. Point to one answer, one open item and the se
 
 **Source pointers**
 
-- [app/analysis.py](../../app/analysis.py) — `analyze` (currently line 7): Builds the report from saved interview state.
+- [app/analysis.py](../../app/analysis.py) — `analyze` (currently line 43): Builds the report from saved interview state.
 - [frontend/src/InterviewReport.tsx](../../frontend/src/InterviewReport.tsx) — `InterviewReport` (currently line 8): Displays answers, scores and transcript evidence.
 
 **Be precise about the limitation**
@@ -74,11 +74,11 @@ Show a number goal and a choice goal in the admin interface, then the configurat
 
 **Source pointers**
 
-- [app/goals.py](../../app/goals.py) — `AnswerGoal` (currently line 15): Question, sufficiency criteria, type and condition.
-- [app/goals.py](../../app/goals.py) — `GoalAnswer` (currently line 70): Model-proposed answer with a quote.
-- [app/goals.py](../../app/goals.py) — `GoalState` (currently line 80): Persisted answer progress.
-- [app/models.py](../../app/models.py) — `Interview` (currently line 120): Owns configuration, answers, transcript and state.
-- [app/main.py](../../app/main.py) — `start` (currently line 439): Creates an owned interview with a configuration snapshot.
+- [app/goals.py](../../app/goals.py) — `AnswerGoal` (currently line 18): Question, sufficiency criteria, type and condition.
+- [app/goals.py](../../app/goals.py) — `GoalAnswer` (currently line 73): Model-proposed answer with a quote.
+- [app/goals.py](../../app/goals.py) — `GoalState` (currently line 83): Persisted answer progress.
+- [app/models.py](../../app/models.py) — `Interview` (currently line 91): Owns configuration, answers, transcript and state.
+- [app/main.py](../../app/main.py) — `start` (currently line 433): Creates an owned interview with a configuration snapshot.
 
 **Be precise about the limitation**
 
@@ -109,14 +109,14 @@ Founders should not have to speak like a form. They can mention several things a
 
 **Demo action**
 
-Show GoalExtraction and then the validation section of advance. Keep the rest of the code collapsed.
+Show Extraction and then the validation section of advance. Keep the rest of the code collapsed.
 
 **Source pointers**
 
-- [app/models.py](../../app/models.py) — `GoalExtraction` (currently line 80): The constrained tool response schema.
-- [voice/extraction.py](../../voice/extraction.py) — `extract` (currently line 13): Requests one structured interpretation.
-- [app/planner.py](../../app/planner.py) — `advance` (currently line 96): Validates and applies the proposed answers.
-- [app/store.py](../../app/store.py) — `SqliteStore` (currently line 16): Atomic persistence for local use.
+- [app/models.py](../../app/models.py) — `Extraction` (currently line 62): The constrained tool response schema.
+- [voice/extraction.py](../../voice/extraction.py) — `extract` (currently line 17): Requests one structured interpretation.
+- [app/planner.py](../../app/planner.py) — `advance` (currently line 104): Validates and applies the proposed answers.
+- [app/store.py](../../app/store.py) — `SqliteStore` (currently line 23): Atomic persistence for local use.
 
 **Be precise about the limitation**
 
@@ -152,9 +152,9 @@ Expand the traction goal. Show its criteria and clarification limit. Optionally 
 
 **Source pointers**
 
-- [app/goals.py](../../app/goals.py) — `default_goals` (currently line 92): Initial questions and sufficiency criteria.
-- [app/planner.py](../../app/planner.py) — `ask` (currently line 58): Tracks first questions and follow-ups.
-- [app/planner.py](../../app/planner.py) — `select_next` (currently line 46): Enforces exhaustion and chooses a next goal.
+- [app/goals.py](../../app/goals.py) — `default_goals` (currently line 95): Initial questions and sufficiency criteria.
+- [app/planner.py](../../app/planner.py) — `ask` (currently line 63): Tracks first questions and follow-ups.
+- [app/planner.py](../../app/planner.py) — `select_next` (currently line 51): Enforces exhaustion and chooses a next goal.
 - [frontend/src/GoalEditor.tsx](../../frontend/src/GoalEditor.tsx) — `GoalEditor` (currently line 2): Edits criteria and clarification budgets.
 - [tests/test_goals.py](../../tests/test_goals.py): Regression examples for clarification and applicability.
 
@@ -193,10 +193,10 @@ Show a financing condition. In a prepared transcript, point out an early answer 
 
 **Source pointers**
 
-- [app/planner.py](../../app/planner.py) — `applicability` (currently line 18): Distinguishes relevant, excluded and unresolved conditions.
-- [app/planner.py](../../app/planner.py) — `select_next` (currently line 46): Prioritizes relevant unanswered required goals.
-- [app/planner.py](../../app/planner.py) — `advance` (currently line 96): Handles review, correction and confirmation.
-- [app/interview.py](../../app/interview.py) — `stop_interview` (currently line 108): Marks unfinished sessions incomplete.
+- [app/planner.py](../../app/planner.py) — `applicability` (currently line 23): Distinguishes relevant, excluded and unresolved conditions.
+- [app/planner.py](../../app/planner.py) — `select_next` (currently line 51): Prioritizes relevant unanswered required goals.
+- [app/planner.py](../../app/planner.py) — `advance` (currently line 104): Handles review, correction and confirmation.
+- [app/interview.py](../../app/interview.py) — `stop_interview` (currently line 22): Marks unfinished sessions incomplete.
 
 **Be precise about the limitation**
 
@@ -231,9 +231,9 @@ Click “Beleg ansehen” in the report and demonstrate transcript search. Show 
 
 **Source pointers**
 
-- [app/planner.py](../../app/planner.py) — `advance` (currently line 96): Checks quote occurrence before applying answers.
-- [app/main.py](../../app/main.py) — `worker_speech` (currently line 633): Persists actual spoken contributions and interruption flags.
-- [app/analysis.py](../../app/analysis.py) — `analyze` (currently line 7): Derives match, coverage, completeness and chronology.
+- [app/planner.py](../../app/planner.py) — `advance` (currently line 104): Checks quote occurrence before applying answers.
+- [app/main.py](../../app/main.py) — `worker_speech` (currently line 611): Persists actual spoken contributions and interruption flags.
+- [app/analysis.py](../../app/analysis.py) — `analyze` (currently line 43): Derives match, coverage, completeness and chronology.
 - [frontend/src/InterviewReport.tsx](../../frontend/src/InterviewReport.tsx) — `InterviewReport` (currently line 8): Links report claims back to transcript entries.
 
 **Be precise about the limitation**
@@ -272,10 +272,10 @@ Show create_stt, then the AgentSession construction in the worker. Avoid opening
 **Source pointers**
 
 - [voice/stt.py](../../voice/stt.py) — `create_stt` (currently line 8): Returns the selected implementation of the common STT interface.
-- [voice/worker.py](../../voice/worker.py) — `entrypoint` (currently line 153): Assembles the LiveKit session.
-- [voice/extraction.py](../../voice/extraction.py) — `Extractor` (currently line 7): Interprets recognized statements.
-- [app/providers.py](../../app/providers.py) — `room_access` (currently line 9): Issues a room-scoped browser token.
-- [app/config.py](../../app/config.py) — `Settings` (currently line 6): Server-side provider selection and credentials.
+- [voice/worker.py](../../voice/worker.py) — `entrypoint` (currently line 175): Assembles the LiveKit session.
+- [voice/extraction.py](../../voice/extraction.py) — `Extractor` (currently line 11): Interprets recognized statements.
+- [app/providers.py](../../app/providers.py) — `room_access` (currently line 12): Issues a room-scoped browser token.
+- [app/config.py](../../app/config.py) — `Settings` (currently line 8): Server-side provider selection and credentials.
 
 **Be precise about the limitation**
 
@@ -310,10 +310,10 @@ Show llm_node and endpointing_delay. Mention the real multi-part-name issue and 
 
 **Source pointers**
 
-- [voice/worker.py](../../voice/worker.py) — `llm_node` (currently line 105): Extracts, persists and yields the canonical reply.
-- [voice/worker.py](../../voice/worker.py) — `endpointing_delay` (currently line 34): Adds patience for the startup name.
-- [voice/worker.py](../../voice/worker.py) — `agent_state` (currently line 212): Records a worker-side latency proxy.
-- [voice/extraction.py](../../voice/extraction.py) — `Extractor` (currently line 7): Uses a bounded request without automatic model retries.
+- [voice/worker.py](../../voice/worker.py) — `llm_node` (currently line 127): Extracts, persists and yields the canonical reply.
+- [voice/worker.py](../../voice/worker.py) — `endpointing_delay` (currently line 44): Adds patience for the startup name.
+- [voice/worker.py](../../voice/worker.py) — `agent_state` (currently line 234): Records a worker-side latency proxy.
+- [voice/extraction.py](../../voice/extraction.py) — `Extractor` (currently line 11): Uses a bounded request without automatic model retries.
 - [tests/test_voice.py](../../tests/test_voice.py): Tests sequencing, failures and endpointing policy.
 
 **Be precise about the limitation**
@@ -396,7 +396,7 @@ Select a preset voice, show save/load configuration, and point to “Version ver
 - [frontend/src/GoalEditor.tsx](../../frontend/src/GoalEditor.tsx) — `MatchEditor` (currently line 10): Optional target profile editing.
 - [frontend/src/App.tsx](../../frontend/src/App.tsx) — `saveConfig` (currently line 104): Export current validated settings.
 - [frontend/src/App.tsx](../../frontend/src/App.tsx) — `loadConfig` (currently line 111): Load a validated draft.
-- [app/main.py](../../app/main.py) — `publish` (currently line 391): Version conflict checks and publication.
+- [app/main.py](../../app/main.py) — `publish` (currently line 383): Version conflict checks and publication.
 - [frontend/src/style.css](../../frontend/src/style.css): Visual hierarchy and responsive layout.
 - [frontend/vite.config.ts](../../frontend/vite.config.ts): Frontend tooling and API proxy.
 - [pyproject.toml](../../pyproject.toml): Python stack and dependency groups.

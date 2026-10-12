@@ -1,101 +1,127 @@
+"""Lifecycle tests exercise the same goal controller used by the application."""
+from __future__ import annotations
+from typing import Literal
 import pytest
 from app.errors import ServiceError
-from app.interview import create_legacy_interview as create_interview, apply_turn, stop_interview
-from app.models import AgentConfig, Extraction, Observation, Fact, Turn
+from app.goals import GoalAnswer
+from app.interview import apply_turn, create_interview, stop_interview, summary
+from app.models import AgentConfig, Extraction, Interview, Turn
 
 
-def make_turn(id='t1', topic='startup', quality='clear', text='Acme baut Software.', **kwargs):
-    return Turn(id=id, text=text, extraction=Extraction(observations=[Observation(topic=topic, value=text, quote=text, quality=quality)], **kwargs))
+def small_interview() -> Interview:
+    config = AgentConfig()
+    config.goals = [goal for goal in config.goals if goal.key in ('startup_name', 'team')]
+    return create_interview('owner', config, 'voice')
 
 
-def test_once_then_move_on_and_do_not_repeat():
-    item = create_interview('owner', AgentConfig(), 'voice')
-    apply_turn(item, make_turn(quality='vague'))
-    assert item.topics['startup'].clarification_used
-    assert item.current_topic == 'startup'
-    apply_turn(item, make_turn(id='t2', quality='vague'))
-    assert item.topics['startup'].status == 'unknown'
-    assert item.current_topic == 'team'
-    assert item.last_reply == item.config.topics[1].question
+def make_turn(
+    id: str = 't1', key: str = 'startup_name', text: str = 'Acme',
+    status: Literal['answered', 'partial', 'unknown'] = 'answered',
+    confirm: bool = False,
+) -> Turn:
+    return Turn(id=id, text=text, extraction=Extraction(
+        answers=[GoalAnswer(goal_key=key, value=text, quote=text, status=status)],
+        confirmed_summary=confirm,
+    ))
 
 
-def test_out_of_order_facts_skip_already_answered_topic():
-    item = create_interview('owner', AgentConfig(), 'voice')
+def test_once_then_move_on_and_do_not_repeat() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn(status='partial'))
+    assert interview.goals['startup_name'].followups_used == 1
+    assert interview.current_goal == 'startup_name'
+    apply_turn(interview, make_turn(id='t2', status='partial'))
+    assert interview.goals['startup_name'].exhausted
+    assert interview.goals['startup_name'].status == 'partial'
+    assert interview.current_goal == 'team'
+    assert interview.last_reply == interview.config.goals[1].question
+
+
+def test_out_of_order_answers_skip_already_answered_goal() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn(key='team', text='Zwei Gründer, Entwicklung und Vertrieb.'))
+    apply_turn(interview, make_turn(id='name'))
+    assert interview.status == 'review'
+    assert interview.current_goal is None
+    assert 'Acme' in summary(interview)
+    assert 'Zwei Gründer' in summary(interview)
+
+
+def test_duplicate_identical_turn_and_conflicting_reuse() -> None:
+    interview = small_interview()
     turn = make_turn()
-    turn.extraction.observations.append(Observation(topic='team', value='Zwei Gründer', quote='Acme', quality='clear'))
-    apply_turn(item, turn)
-    assert item.current_topic == 'product'
-
-
-def test_duplicate_identical_turn_and_conflicting_reuse():
-    item = create_interview('owner', AgentConfig(), 'voice')
-    turn = make_turn()
-    apply_turn(item, turn)
-    before = item.model_dump()
-    apply_turn(item, turn)
-    assert item.model_dump() == before
+    apply_turn(interview, turn)
+    before = interview.model_dump()
+    apply_turn(interview, turn)
+    assert interview.model_dump() == before
     with pytest.raises(ServiceError, match='anderem Inhalt'):
-        apply_turn(item, make_turn(text='Anderer Inhalt'))
+        apply_turn(interview, make_turn(text='Anderer Inhalt'))
 
 
-def test_unsubstantiated_quote_rejected():
-    item = create_interview('owner', AgentConfig(), 'voice')
+def test_unsubstantiated_quote_rejected() -> None:
+    interview = small_interview()
+    before = interview.model_dump()
     turn = make_turn()
-    turn.extraction.observations[0].quote = 'not in transcript'
+    turn.extraction.answers[0].quote = 'not in transcript'
     with pytest.raises(ServiceError) as exc:
-        apply_turn(item, turn)
+        apply_turn(interview, turn)
     assert exc.value.code == 'INVALID_EVIDENCE'
+    assert interview.model_dump() == before
 
 
-def test_complete_requires_explicit_confirmation_and_saves_unknowns():
-    item = create_interview('owner', AgentConfig(), 'voice')
-    for i, t in enumerate(item.config.topics):
-        apply_turn(item, make_turn(id=f't{i}', topic=t.key))
-    assert item.status == 'review'
-    apply_turn(item, Turn(id='ambiguous', text='Vielleicht', extraction=Extraction()))
-    assert item.status == 'review'
-    apply_turn(item, Turn(id='yes', text='Ja, stimmt.', extraction=Extraction(confirmed_summary=True)))
-    assert item.status == 'completed'
-    assert item.ended_at
-    assert 'gespeichert' in item.last_reply
-    with pytest.raises(ServiceError):
-        apply_turn(item, make_turn(id='closed'))
+def test_complete_requires_explicit_confirmation_and_saves_unknowns() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    apply_turn(interview, make_turn(id='team', key='team', text='Noch offen', status='unknown'))
+    assert interview.status == 'review'
+    assert '1 Pflichtangaben' in summary(interview)
+    apply_turn(interview, Turn(id='ambiguous', text='Vielleicht', extraction=Extraction()))
+    assert interview.status == 'review'
+    apply_turn(interview, Turn(id='yes', text='Ja, stimmt.', extraction=Extraction(confirmed_summary=True)))
+    assert interview.status == 'completed'
+    assert interview.ended_at
+    assert interview.goals['team'].status == 'unknown'
+    with pytest.raises(ServiceError) as exc:
+        apply_turn(interview, make_turn(id='closed'))
+    assert exc.value.code == 'INTERVIEW_CLOSED'
 
 
-def test_correction_replaces_fact_and_requires_fresh_confirmation():
-    item = create_interview('owner', AgentConfig(), 'voice')
-    first = make_turn(facts=[Fact(key='startup_name', value='Acme', quote='Acme')])
-    apply_turn(item, first)
-    item.status = 'review'
-    correction = make_turn(id='correction', text='Unser Name ist Beta.', confirmed_summary=True,
-                           facts=[Fact(key='startup_name', value='Beta', quote='Beta')])
-    apply_turn(item, correction)
-    assert item.facts['startup_name']['value'] == 'Beta'
-    assert item.facts['startup_name']['evidence_turn'] == 'correction'
-    assert item.status == 'review'
+def test_correction_replaces_answer_and_requires_fresh_confirmation() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    apply_turn(interview, make_turn(id='team', key='team', text='Zwei erfahrene Gründer.'))
+    assert interview.status == 'review'
+    apply_turn(interview, make_turn(id='correction', text='Beta', confirm=True))
+    assert interview.goals['startup_name'].value == 'Beta'
+    assert interview.goals['startup_name'].evidence_turn == 'correction'
+    assert interview.status == 'review'
+    assert 'Beta' in summary(interview)
+    assert 'Acme' not in summary(interview)
 
 
-def test_stop_preserves_partial_and_is_idempotent():
-    item = create_interview('owner', AgentConfig(), 'voice')
-    apply_turn(item, make_turn())
-    stop_interview(item)
-    before = item.model_dump()
-    stop_interview(item)
-    assert item.model_dump() == before
-    assert item.status == 'incomplete'
-    assert item.topics['startup'].value
+def test_stop_preserves_partial_and_is_idempotent() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn(status='partial'))
+    stop_interview(interview)
+    before = interview.model_dump()
+    stop_interview(interview)
+    assert interview.model_dump() == before
+    assert interview.status == 'incomplete'
+    assert interview.goals['startup_name'].value == 'Acme'
+    assert interview.goals['startup_name'].status == 'partial'
 
 
-def test_missing_observations_get_one_clarification():
-    item = create_interview('owner', AgentConfig(), 'voice')
+def test_missing_answers_get_one_clarification() -> None:
+    interview = small_interview()
     for id in ('empty1', 'empty2'):
-        apply_turn(item, Turn(id=id, text='Weiß ich nicht.', extraction=Extraction()))
-    assert item.current_topic == 'team'
-    assert item.topics['startup'].status == 'unknown'
+        apply_turn(interview, Turn(id=id, text='Weiß ich nicht.', extraction=Extraction()))
+    assert interview.current_goal == 'team'
+    assert interview.goals['startup_name'].status == 'unknown'
+    assert interview.goals['startup_name'].followups_used == 1
 
 
-def test_config_cannot_drop_or_duplicate_required_topics():
-    cfg = AgentConfig().model_dump()
-    cfg['topics'][1] = cfg['topics'][0]
+def test_config_cannot_drop_or_duplicate_required_topics() -> None:
+    config = AgentConfig().model_dump()
+    config['topics'][1] = config['topics'][0]
     with pytest.raises(ValueError):
-        AgentConfig.model_validate(cfg)
+        AgentConfig.model_validate(config)

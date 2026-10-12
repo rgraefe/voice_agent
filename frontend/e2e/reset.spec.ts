@@ -9,7 +9,7 @@ for(const fail of [false,true]){
    if(path.endsWith('/stop')){stopped++;return route.fulfill(fail?{status:503,json:{error:{message:'Speichern nicht erreichbar'}}}:{json:{status:'incomplete'}});}
    if(path==='/api/interviews'&&request.method()==='POST'){
     const id=request.postDataJSON().request_id;ids.push(id);
-    return route.fulfill({json:{id,status:'active',mode:'simulation',planner_version:1,created_at:new Date().toISOString(),config:{name:'Mira',version:1,topics:[]},topics:{},transcript:[{id:'old',role:'user',text:'Alter Firmenname',timestamp:new Date().toISOString()}]}});
+    return route.fulfill({json:{id,status:'active',mode:'simulation',goals:{},current_goal:null,created_at:new Date().toISOString(),config:{name:'Mira',version:1,topics:[],goals:[]},topics:{},transcript:[{id:'old',role:'user',text:'Alter Firmenname',timestamp:new Date().toISOString()}]}});
    }
    return route.fulfill({json:[]});
   });

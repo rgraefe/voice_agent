@@ -23,7 +23,7 @@ flowchart LR
 | --- | --- | --- |
 | Frontend | Admin, Interview, Historie, Auswertung | React, TypeScript, Vite; `frontend/src/` |
 | API | Authentifizierung, Konfiguration, Sitzungen, Speicherung | FastAPI und Pydantic; `app/main.py` |
-| Controller | Antwortziele, Nachfragen, Bedingungen, Abschluss | `app/planner.py`; Legacy-Pfad in `app/interview.py` |
+| Controller | Antwortziele, Nachfragen, Bedingungen, Abschluss | `app/planner.py`; Lebenszyklus-Funktionen in `app/interview.py` |
 | Auswertung | Deterministischer Match, Vollständigkeit, Statistik | `app/analysis.py` |
 | Voice Worker | Echtzeit-Audio und Anbieter-Orchestrierung | LiveKit Agents **1.8.5**; `voice/worker.py` |
 | Extraktion | Ein strukturierter Modellaufruf pro User-Turn | `voice/extraction.py` |
@@ -142,7 +142,7 @@ Für Vite-Entwicklung im Ordner `frontend` `npm run dev` verwenden und `PUBLIC_O
 1. Der Browser veröffentlicht Mikrofon-Audio über WebRTC.
 2. Die STT-Factory liefert Deepgram Nova-3 oder ElevenLabs Scribe v2 Realtime für laufende Transkription. Silero VAD und der lokale LiveKit-Turn-Detector helfen bei der Erkennung von Sprechpausen und Gesprächsenden.
 3. Nach einem abgeschlossenen User-Turn ruft der Worker das konfigurierte OpenAI-Modell auf. Timeout: sieben Sekunden; keine automatischen SDK-Retries für diesen Modellaufruf.
-4. Das Modell muss `record_interview_observations` mit strukturierten Argumenten aufrufen. Neue Interviews verwenden `GoalExtraction` ohne die früheren Felder `facts` und `observations`.
+4. Das Modell muss `record_interview_observations` mit strukturierten Argumenten aufrufen. Der gemeinsame Vertrag `Extraction` enthält ausschließlich `answers`, `acknowledgment` und `confirmed_summary`.
 5. FastAPI validiert die Angaben und schreibt Transkript, Antworten und Fortschritt atomar. Der Controller bestimmt die nächste Frage oder die Abschlussprüfung.
 6. Erst nach erfolgreicher Backend-Antwort geht der kanonische Antworttext an ElevenLabs. Dessen Audio wird über LiveKit zum Browser gestreamt.
 7. Tatsächlich gesprochene Assistant-Beiträge werden über LiveKits Conversation-Events gespeichert. Andere Ereignisse wie `AgentHandoff` werden ignoriert.
@@ -153,7 +153,7 @@ Es gibt keinen zweiten LLM-Aufruf zur Formulierung der nächsten Frage. Fragen u
 
 ## 6. Gesprächssteuerung
 
-Neue Interviews verwenden `planner_version=2`. Historische Interviews behalten ihren bisherigen Controller. Die veröffentlichte Konfiguration wird bei Bedarf migriert; alte Interview-Snapshots werden nicht nachträglich umgestellt.
+Alle Interviews verwenden denselben Antwortziel-Controller. `interview.py` stellt Start, Verarbeitung, Zusammenfassung und Stopp bereit; `planner.py` enthält die Gesprächsregeln. Es gibt keine Auswahl zwischen Controller-Generationen und keine automatische Migration alter Interviewformate. Auch gespeicherte Konfigurationsdateien müssen dem aktuellen Schema entsprechen: Themen enthalten nur `key` und `title`; Fragen und Rückfragen stehen bei den Antwortzielen. Nach diesem Entwicklungsumbau die aktuelle Admin-Konfiguration erneut exportieren. Die Konfigurationsversion und der Snapshot pro Interview bleiben erhalten.
 
 ### Antwortziele
 
@@ -253,7 +253,18 @@ Die App selbst speichert kein Roh-Audio. Die synthetischen WAV-Testdateien sind 
 .venv/Scripts/python -m pytest -q
 ```
 
-Stand der letzten Prüfung: **48 Tests bestanden**, einschließlich LiveKit-SDK-Lebenszyklus mit simulierten Anbietern, Belegvalidierung, Bedingungen, Korrekturen, Match, Authentifizierung, Idempotenz und Fehlerfällen. Diese Tests führen keine echten kostenpflichtigen Gespräche.
+Stand der letzten Prüfung: **71 Tests bestanden**, einschließlich LiveKit-SDK-Lebenszyklus mit simulierten Anbietern, Belegvalidierung, Bedingungen, Korrekturen, Match, Authentifizierung, Idempotenz und Fehlerfällen. Diese Tests führen keine echten kostenpflichtigen Gespräche.
+
+### Statische Python-Typprüfung
+
+```powershell
+.venv/Scripts/python -m pip install -e ".[voice,test,typing]"
+.venv/Scripts/python -m mypy
+```
+
+Die Konfiguration in `pyproject.toml` prüft `app/`, `voice/`, `scripts/` und `tests/` und verlangt annotierte Funktionsparameter und Rückgaben (außer dem impliziten `self`/`cls`). Das Pydantic-Plugin berücksichtigt die Modellkonstruktoren. Fremdbibliotheken werden nicht vollständig mitgeprüft; dynamische Dokumente verwenden bewusst `Any`. Dies ist keine vollständig strikte Typprüfung und ersetzt weder Pydantic-Validierung noch Regressionstests.
+
+Die API-Routen setzen ausdrücklich `response_model=None`: Die neuen Rückgabeannotationen dienen hier der statischen Prüfung und sollen keine zusätzliche FastAPI-Antwortvalidierung oder Filterung aktivieren. Der Bericht ist als `AnalysisReport` typisiert. Details und Beispiele stehen im [Backend-Deep-Dive](learning/APP_DEEP_DIVE.md).
 
 ### Frontend-Build und reguläre Browser-Tests
 
@@ -345,7 +356,7 @@ Stimme, Flash-/Turbo-Modell und Pause jeweils einzeln variieren. Eine kürzere P
 | 401 beim Worker | `WORKER_SECRET` in beiden Prozessen identisch und nicht leer? Nach Änderung neu starten. |
 | Keine Audiowiedergabe | Hörprobe, Tab-Lautstärke, Audioausgang und Browserrechte prüfen. |
 | Falsch erkannte Eigennamen | Buchstabieren, ausdrücklich korrigieren und Zusammenfassung prüfen. Originalbeleg nicht überschreiben. |
-| JSON-/Extraktionsfehler | Modellzugriff und Tool-Schema prüfen; neue Interviews dürfen keine Legacy-Facts liefern. |
+| JSON-/Extraktionsfehler | Modellzugriff und Tool-Schema prüfen; `Extraction` akzeptiert nur `answers`, `acknowledgment` und `confirmed_summary`. |
 | Konfigurationskonflikt | Neue Version laden, Änderungen prüfen und erneut veröffentlichen. |
 | Historie wirkt leer | Richtiger Founder-Zugang und richtige Datenbank? Stabiles `SESSION_SECRET` verwenden. |
 | Port bereits belegt | Bereits laufenden eigenen Prozess verwenden oder geordnet beenden; keine zweite Instanz auf demselben Port starten. |

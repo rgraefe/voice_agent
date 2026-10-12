@@ -1,3 +1,7 @@
+from __future__ import annotations
+from typing import Literal
+from typing import Never
+from app.types import Document
 from app.goals import GoalAnswer
 import asyncio
 from types import SimpleNamespace
@@ -7,16 +11,16 @@ from fastapi.testclient import TestClient
 from livekit.agents import AgentSession
 from app.config import Settings
 from app.interview import create_interview, apply_turn
-from app.models import AgentConfig, Extraction, Observation, Interview, Turn
+from app.models import AgentConfig, Extraction, Interview, Turn
 from app.providers import voice_preview, room_access
 from voice.worker import Interviewer, ControllerModel, Backend
 
 
 class FakeBackend:
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = create_interview('owner',AgentConfig(),'voice')
-        self.calls=[]
-    async def request(self, method, path='', payload=None):
+        self.calls: list[tuple[str, str, Document | None]]=[]
+    async def request(self, method: str, path: str='', payload: Document | None=None) -> Document:
         self.calls.append((method,path,payload))
         if path=='/turns':
             apply_turn(self.state,Turn.model_validate(payload))
@@ -26,11 +30,11 @@ class FakeBackend:
 
 
 class FakeExtractor:
-    async def extract(self,text,state):
+    async def extract(self,text: str,state: Interview) -> tuple[Extraction, dict[str, float]]:
         return Extraction(answers=[GoalAnswer(goal_key='startup_name',value=text,quote=text,status='answered')]), {'input_tokens':100.0}
 
 
-def test_names_get_extra_pause_without_slowing_other_answers():
+def test_names_get_extra_pause_without_slowing_other_answers() -> None:
     from voice.worker import endpointing_delay
     state=create_interview('owner',AgentConfig(),'voice')
     assert endpointing_delay(state)==1.2
@@ -42,7 +46,7 @@ def test_names_get_extra_pause_without_slowing_other_answers():
 
 
 @pytest.mark.asyncio
-async def test_worker_speaks_only_canonical_persisted_reply():
+async def test_worker_speaks_only_canonical_persisted_reply() -> None:
     backend=FakeBackend()
     agent=Interviewer(backend.state,backend,FakeExtractor())
     agent.pending_turn=('turn1','Acme baut Software.')
@@ -53,9 +57,9 @@ async def test_worker_speaks_only_canonical_persisted_reply():
 
 
 @pytest.mark.asyncio
-async def test_worker_closes_after_repeated_extraction_failure():
+async def test_worker_closes_after_repeated_extraction_failure() -> None:
     class Broken:
-        async def extract(self,*args):
+        async def extract(self,*args: object) -> Never:
             raise TimeoutError()
     backend=FakeBackend()
     agent=Interviewer(backend.state,backend,Broken())
@@ -71,7 +75,7 @@ async def test_worker_closes_after_repeated_extraction_failure():
 
 
 @pytest.mark.parametrize('language', ['de', 'en'])
-def test_retry_phrases_rotate_independently_of_failure_streak(language):
+def test_retry_phrases_rotate_independently_of_failure_streak(language: Literal['de', 'en']) -> None:
     from voice.worker import RETRY_MESSAGES
     backend=FakeBackend()
     backend.state.config.language=language
@@ -86,14 +90,14 @@ def test_retry_phrases_rotate_independently_of_failure_streak(language):
 
 
 @pytest.mark.asyncio
-async def test_worker_does_not_claim_success_on_failed_write():
+async def test_worker_does_not_claim_success_on_failed_write() -> None:
     backend=FakeBackend()
     original=backend.request
-    async def failed(method,path='',payload=None):
+    async def failed(method: str,path: str='',payload: Document | None=None) -> Document:
         if path=='/turns':
             raise httpx.ConnectError('offline')
         return await original(method,path,payload)
-    backend.request=failed
+    setattr(backend, 'request', failed)
     agent=Interviewer(backend.state,backend,FakeExtractor())
     agent.pending_turn=('turn1','Acme')
     result=[part async for part in agent.llm_node(None,[],None)]
@@ -102,14 +106,14 @@ async def test_worker_does_not_claim_success_on_failed_write():
 
 
 @pytest.mark.asyncio
-async def test_livekit_session_uses_custom_pipeline_node():
+async def test_livekit_session_uses_custom_pipeline_node() -> None:
     # Exercise the actual installed SDK lifecycle without microphones or paid providers.
     backend=FakeBackend()
     agent=Interviewer(backend.state,backend,FakeExtractor())
-    async def no_greeting():
+    async def no_greeting() -> None:
         pass
-    agent.on_enter=no_greeting
-    session=AgentSession(llm=ControllerModel())
+    setattr(agent, 'on_enter', no_greeting)
+    session: AgentSession[None]=AgentSession(llm=ControllerModel())
     try:
         await session.start(agent=agent)
         await session.run(user_input='Acme baut Software.')
@@ -119,13 +123,13 @@ async def test_livekit_session_uses_custom_pipeline_node():
 
 
 @pytest.mark.asyncio
-async def test_token_is_room_scoped_microphone_only():
+async def test_token_is_room_scoped_microphone_only() -> None:
     import jwt
     settings=Settings(_env_file=None,livekit_api_key='key',livekit_api_secret='x'*40)
-    item=create_interview('owner',AgentConfig(),'voice')
-    access=await room_access(settings,item)
+    interview=create_interview('owner',AgentConfig(),'voice')
+    access=await room_access(settings,interview)
     claims=jwt.decode(access['token'],'x'*40,algorithms=['HS256'])
-    assert claims['video']['room']=='interview-'+item.id
+    assert claims['video']['room']=='interview-'+interview.id
     assert claims['video']['canPublishSources']==['microphone']
     assert claims['video']['canPublishData'] is False
     assert claims['sub']=='owner'
@@ -133,10 +137,10 @@ async def test_token_is_room_scoped_microphone_only():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure',['timeout','500'])
-async def test_voice_preview_errors_are_structured(monkeypatch,failure):
+async def test_voice_preview_errors_are_structured(monkeypatch: pytest.MonkeyPatch,failure: str) -> None:
     import app.providers as providers
     original=httpx.AsyncClient
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         if failure=='timeout':
             raise httpx.ReadTimeout('private transcript',request=request)
         return httpx.Response(500,text='private credential')
@@ -155,10 +159,10 @@ async def test_voice_preview_errors_are_structured(monkeypatch,failure):
     ('quota_exceeded','Kreditlimit'),
     ('voice_not_found','Voice-ID'),
 ])
-async def test_voice_preview_configuration_errors_are_actionable(monkeypatch,code,expected):
+async def test_voice_preview_configuration_errors_are_actionable(monkeypatch: pytest.MonkeyPatch,code: str,expected: str) -> None:
     import app.providers as providers
     original=httpx.AsyncClient
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400,json={'detail':{'status':code,'message':'private-provider-body'}})
     monkeypatch.setattr(providers.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handler)))
     from app.errors import ServiceError
@@ -169,11 +173,12 @@ async def test_voice_preview_configuration_errors_are_actionable(monkeypatch,cod
     assert not exc.value.retryable
     assert 'private' not in exc.value.message
 
-def test_non_message_livekit_events_do_not_break_transcript_callback():
+def test_non_message_livekit_events_do_not_break_transcript_callback() -> None:
     from voice.worker import spoken_message
     assert spoken_message(SimpleNamespace(type='agent_handoff')) is None
     assert spoken_message(SimpleNamespace(role='user')) is None
     result=spoken_message(SimpleNamespace(role='assistant',id='spoken',text_content='Hallo',created_at=1700000000.0,interrupted=True))
+    assert result is not None
     assert result['text']=='Hallo' and result['interrupted']
     assert result['timestamp'].endswith('+00:00')
 
@@ -187,7 +192,7 @@ def test_non_message_livekit_events_do_not_break_transcript_callback():
     ({'code':'invalid_voice_id'},400,'Voice-ID'),
     ({'status':['invalid']},402,'Zahlung'),
 ])
-async def test_preview_understands_old_and_new_provider_error_formats(monkeypatch,detail,status,expected):
+async def test_preview_understands_old_and_new_provider_error_formats(monkeypatch: pytest.MonkeyPatch,detail: Document,status: int,expected: str) -> None:
     import app.providers as providers
     from app.errors import ServiceError
     original=httpx.AsyncClient
