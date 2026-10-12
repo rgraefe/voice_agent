@@ -106,7 +106,7 @@ sequenceDiagram
             end
             W->>W: on_user_turn_completed / llm_node: turn_id und Text übernehmen
             W->>M: extract(Text, Zustand): Ziele, Kriterien, bisherige Antworten, Tonalität
-            Note over W,M: Genau ein strukturierter Aufruf; keine Token-Streaming-Antwort
+            Note over W,M: Genau ein strukturierter Aufruf, keine Token-Streaming-Antwort
             M-->>W: Extraction: answers, Belegzitate, acknowledgment, confirmed_summary
             W->>W: Pydantic prüft die Struktur des Tool-Ergebnisses
             W->>A: POST /api/internal/interviews/{id}/turns (Turn)
