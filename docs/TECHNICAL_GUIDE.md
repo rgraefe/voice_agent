@@ -426,3 +426,36 @@ Mit „Interview starten“ bzw. „Text-Testlauf“ beginnt anschließend eine 
 Unter „Agent konfigurieren“ lädt „Konfiguration speichern“ alle aktuellen Formulareinstellungen als `agent-konfiguration.json` herunter, einschließlich noch nicht veröffentlichter Änderungen. Enthalten sind Fragen, Antwortziele, Zielprofil und Stimmeinstellungen. Server-Zugangsdaten sind nicht Teil dieser Datei.
 
 „Konfiguration laden“ öffnet eine gespeicherte JSON-Datei (maximal 1 MB). Die Einstellungen werden validiert und als Entwurf ins Formular übernommen; bestehende Formularänderungen werden dabei ersetzt. Erst „Version veröffentlichen“ aktiviert den Entwurf für neue Gespräche. Ungültige Dateien verändern die Konfiguration nicht. Mehrere Varianten können unter unterschiedlichen Dateinamen aufbewahrt werden.
+
+
+### Korrekturen und Rückfragen während einer offenen Frage
+
+Der Planner speichert nachträgliche Ergänzungen zu anderen Antwortzielen und wiederholt anschließend die noch offene Frage, ohne deren Rückfragebudget zu verbrauchen. `dialogue_act` unterscheidet Antworten, Wiederholungswünsche, Verständnisfragen und Fragen nach fehlenden Angaben. Verständnisfragen erhalten die konfigurierten Antwortkriterien als Erklärung. Eine Frage in der Abschlussphase darf keine Bestätigung auslösen; fehlende Pflichtziele werden benannt. Echte unvollständige Antworten bleiben an das konfigurierte Rückfragebudget gebunden.
+
+Regressionstest: Während der Frage nach der Finanzierungsrunde zweimal den Kapitalbetrag korrigieren. Die Rundenfrage muss offen bleiben. Anschließend nach der Bedeutung der Frage fragen, dann die Runde beantworten. In der Zusammenfassung nach fehlenden Pflichtangaben fragen: Das Interview darf dadurch nicht abgeschlossen werden. Diese Logik ist lokal getestet; Live-Erkennung und LLM-Klassifikation müssen zusätzlich mit Mikrofon geprüft werden.
+
+### Prüfung vager Antworten
+
+Die Extraktion muss alle konfigurierten Vollständigkeitskriterien prüfen, nicht nur die thematische Relevanz einer Antwort. Der Prompt enthält Gegenbeispiele für Mittelverwendung (nur „Wachstum“), Wettbewerb (nur „keine Konkurrenz“) und Traktion (nur „viel Interesse“). Solche Antworten sind bei den Standardkriterien teilweise beantwortet und lösen bei verfügbarem Budget eine Rückfrage aus. Konkrete Ausgaben oder Alternativen genügen ohne zusätzliche, nicht konfigurierte Anforderungen. Diese semantische Einstufung bleibt eine LLM-Entscheidung; lokale Tests des Controllers garantieren keine Live-Klassifikation. Nach Promptänderungen den Voice-Worker neu starten.
+
+
+### Fachbegriffe und Wiederholung der Zusammenfassung
+
+Die STT-Factory übergibt MVP, Minimum Viable Product, SaaS, Pre-Seed, Seed und GmbH als Erkennungshinweise an beide Anbieter. Hinweise sind keine Garantie für korrekte Transkription. Kürzel können im Gespräch ausgeschrieben oder mit Buchstabierwörtern korrigiert werden. Der Extraktionsprompt verlangt konkrete Rollen und Erfahrungen beim Team und untersagt die Auswahl einer Kategorie aus abgebrochenen Sätzen wie „Ja, wir haben einen“.
+
+Ein Wiederholungswunsch in der Review-Phase gibt die vollständige Zusammenfassung erneut aus, auch bei noch offenen Angaben. Korrekturen erzeugen ebenfalls eine vollständige aktualisierte Zusammenfassung. Ein abgebrochener Audiostream ist damit nicht automatisch diagnostiziert oder behoben; Transkript und lokal erzeugter Antworttext sind von tatsächlich gehörtem Audio zu unterscheiden.
+
+
+### Worker-Robustheit und Diagnose (13.10.2026)
+
+Auswertungs- und Turn-Validierungsfehler beenden das Interview nicht mehr nach zwei Versuchen. Der Worker bietet Wiederholung oder manuellen Stopp an; abgewiesene Antworten verbrauchen kein Rückfragenbudget. Es gibt keine automatische Endlosschleife von LLM-Aufrufen. Das Zeitlimit gilt weiter.
+
+Bei unklarer Speicherbestätigung liest der Worker den Backendzustand erneut. Nur wenn die Turn-ID dort als verarbeitet bestätigt ist, spricht er die gespeicherte Antwort. Andernfalls behauptet er keinen Erfolg. Fehlgeschlagene Aussagen werden nach Möglichkeit im Transkript erhalten. Fehler beim Schreiben von Messwerten beeinflussen einen bereits erfolgreichen Turn nicht.
+
+Warnungen im Worker-Terminal enthalten `stage`, `category`, einen freigegebenen Backend-Fehlercode sowie Interview-/Turn-ID. Beispielsweise unterscheidet `stage=extraction category=timeout` einen Modelltimeout von `stage=save_turn category=validation code=INVALID_EVIDENCE`. Exception-Texte, Antwortbodies, Schlüssel und Transkriptinhalte werden dabei nicht ausgegeben. LiveKit-Pipelinefehler werden zusätzlich nach STT/TTS/LLM-Komponente eingeordnet, soweit das SDK diese ausweist. Die Diagnose steht im Terminal, nicht als neue Admin-Ansicht zur Verfügung.
+
+Die Überwachung toleriert zwei aufeinanderfolgende vorübergehende Backend-Pollingfehler und beendet beim dritten. Erfolgreiche Abfragen setzen den Zähler zurück. Permanente HTTP-Fehler, insbesondere fehlende Berechtigung, führen weiterhin zum Schließen. Die bestehende HTTP-Wiederholung bei Netzwerkfehlern läuft vor dieser Zählung. Bei unerreichbarem Backend kann die Speicherung des Endstatus nicht garantiert werden.
+
+Die HTTP-Client-Konstruktion für Backend und OpenAI läuft außerhalb des Audio-Event-Loops. SSL-Warnungen aus internen LiveKit-/ElevenLabs-Initialisierungen sind davon nicht automatisch behoben.
+
+Aktivierung: Voice-Worker mit Strg+C beenden und mit `.venv/Scripts/python -m voice.worker start --log-level warn` neu starten. Kein Frontend-Build und kein API-Neustart für diese Änderung erforderlich. Automatisierte Tests verwenden simulierte Fehler; ein vollständiges Live-Gespräch bleibt als zusätzliche Abnahme erforderlich.

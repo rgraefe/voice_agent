@@ -4,7 +4,7 @@ A slide-ready companion to the code walkthroughs. Plan for 10–12 minutes: roug
 
 ## How to turn this into slides
 
-Each numbered section is one slide. Put the title, main message and diagram on the slide. Put the spoken explanation, demo action and limitations in speaker notes. Keep source links for a technical appendix or live code navigation rather than crowding the slide.
+Make slide 3 the central architecture decision and allow 60–90 seconds for it. Refer back to that boundary when discussing follow-ups, latency and testing. Each numbered section is one slide. Put the title, main message and diagram on the slide. Put the spoken explanation, demo action and limitations in speaker notes. Keep source links for a technical appendix or live code navigation rather than crowding the slide.
 
 Every diagram is available below as Mermaid source and separately in `diagrams/*.mmd`. For PowerPoint, render a diagram to SVG using a Mermaid-compatible editor and insert that SVG, or redraw its small number of boxes as editable PowerPoint shapes. The `.mmd` files remain editable source; they are not images or PowerPoint files. Avoid public diagram tools if you later add confidential content.
 
@@ -86,43 +86,72 @@ The current system isolates records by founder and interview. It does not yet ha
 
 **Transition:** Once the data structure was clear, I could decide which decisions actually need AI.
 
-## 3. Give AI a bounded responsibility
+## 3. The backend chooses the question; AI understands the answer
 
-**Design question:** Which work requires language understanding?
+**Design question:** How much freedom should the language model have?
 
-**On-slide message:** The model interprets language. Deterministic code controls validation, progression and persistence.
+**On-slide message:** Use AI to interpret the founder. Keep question selection, follow-up limits and persistence in code.
 
 ```mermaid
 flowchart LR
-    U[Recognized statement] --> L[AI proposes typed answers]
-    L --> V[Validate structure and evidence]
-    V --> P[Deterministic planner]
-    P --> S[Save canonical state]
-    S --> R[Next reply]
+    U[Founder statement] --> L[OpenAI extracts answers and evidence]
+    L --> V[Backend validates and updates state]
+    V --> P[Backend selects goal and configured question]
+    P --> S[Save interview before returning reply]
+    S --> R[Optional AI acknowledgment plus fixed question]
+    R --> T[ElevenLabs speaks the reply]
 ```
 
 [Standalone diagram](diagrams/03-give-ai-a-bounded-responsibility.mmd)
 
-**Speaker notes**
+**Three points to put on the slide**
 
-Founders should not have to speak like a form. They can mention several things at once or correct an earlier statement. The language model maps those statements into our answer schema. But the model does not decide whether a database write succeeded or whether it can ask indefinitely. Those are explicit rules. This also makes the central logic testable without microphones or paid services.
+- OpenAI extracts answers, evidence and a short acknowledgment.
+- The backend selects a predefined question or clarification from the configured goals.
+- One structured model call per turn avoids a second model round trip for wording.
+
+**Speaker notes — 60–90 seconds**
+
+I started with the required outcome: comparable answers supported by the conversation. Founders should still be able to speak naturally, answer several questions at once, or correct themselves. That is where I use the language model: it maps their statements to our answer goals and judges whether the configured criteria are met.
+
+The backend then validates those proposed answers and decides what information is still missing. It selects the next configured question or clarification, enforces the follow-up budget, and saves the resulting state. OpenAI can contribute a short acknowledgment, but it does not rewrite the question. The worker speaks the reply only after the backend has returned the saved result.
+
+For this demo, that boundary gives me predictable progression, testable rules and one model call per turn. The compromise is that clarifications sound less tailored to the exact wording of the founder. My next step toward more natural dialogue would be to let AI phrase a question for a goal selected by the backend, while retaining the configured question as a fallback.
+
+**Concrete example to explain aloud**
+
+Founder: “We probably need about half a million.”
+
+The extractor needs an explicit currency before treating that as a complete EUR answer. The backend can therefore select the configured clarification: “Welchen konkreten Betrag in Euro plant ihr aufzunehmen?” A future contextual phrasing step could instead ask: “About half a million—do you mean euros?” Both pursue the same goal, but only the latter generates the question wording from this conversation.
+
+**Alternatives — keep in speaker notes or a backup slide**
+
+| Alternative | What it improves | Why it was not selected for this demo |
+| --- | --- | --- |
+| Backend selects the goal, AI phrases the question afterward | Contextual wording while preserving progression rules | Adds another sequential model call in a straightforward implementation, with latency, cost and wording checks |
+| One call extracts answers and proposes the next question | Contextual wording without a second sequential call | The question is proposed before backend validation and next-goal selection, so it needs a consistency check and fallback |
+| LLM controls the interview and chooses when to finish | Flexible conversation, including unexpected counterquestions | Harder to enforce coverage, follow-up limits and completion rules, and harder to reproduce failures |
+
+The current approach improves predictability but does not guarantee semantic accuracy or that every founder supplies every answer. Unknown and partial information remains visible. A schema and an exact quote establish structure and traceability, not truth. The model's sufficiency classification still influences which path the deterministic controller takes.
 
 **Demo action**
 
-Show Extraction and then the validation section of advance. Keep the rest of the code collapsed.
+Show a goal's configured question and clarification in the admin interface. Then show `Extraction` and `ask()` in code: the model returns answers and an acknowledgment, while `ask()` selects the stored question text. A text simulation demonstrates the controller only; it does not demonstrate AI interpretation.
 
 **Source pointers**
 
-- [app/models.py](../../app/models.py) — `Extraction` (currently line 62): The constrained tool response schema.
-- [voice/extraction.py](../../voice/extraction.py) — `extract` (currently line 17): Requests one structured interpretation.
-- [app/planner.py](../../app/planner.py) — `advance` (currently line 104): Validates and applies the proposed answers.
-- [app/store.py](../../app/store.py) — `SqliteStore` (currently line 23): Atomic persistence for local use.
+- [app/models.py](../../app/models.py) — `Extraction`: Answers, acknowledgment and explicit summary confirmation.
+- [voice/extraction.py](../../voice/extraction.py) — `extract`: One structured model call and sufficiency instructions.
+- [app/planner.py](../../app/planner.py) — `advance`, `select_next`, `ask`: Validation, progression, fixed questions and optional acknowledgment.
+- [app/goals.py](../../app/goals.py) — `AnswerGoal`: Editable question, clarification and criteria.
+- [voice/worker.py](../../voice/worker.py) — `llm_node`: Speaks the canonical backend reply through the TTS pipeline.
+- [app/store.py](../../app/store.py) — `update`: Atomic persistence before the successful response.
 
 **Be precise about the limitation**
 
-Schema validity and exact quote presence do not prove the interpretation is semantically correct.
+The tone setting primarily influences the AI acknowledgment; it does not rewrite the configured questions. A hard-coded full-company-name clarification is an additional backend exception. Changing the TTS voice changes delivery, not contextual phrasing. One model call is a latency-saving design choice, not proof that the complete voice round trip always meets the two-second target.
 
-**Transition:** Next I needed to define what sufficient information means for each question.
+**Transition:** With that responsibility split established, I needed explicit criteria for when each answer is sufficient.
 
 ## 4. Define answer goals and clarification rules
 

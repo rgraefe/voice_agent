@@ -22,7 +22,9 @@ def test_granular_goals_skip_future_answers_and_bound_clarification() -> None:
     interview=create_interview('a',AgentConfig(),'voice')
     answer(interview,'team')
     assert interview.current_goal=='startup_name'
-    assert interview.goals['startup_name'].followups_used==1
+    assert interview.goals['startup_name'].followups_used==0
+    answer(interview,'startup_name',status='partial')
+    assert interview.current_goal=='startup_name'
     answer(interview,'startup_name',status='partial')
     assert interview.current_goal=='sector'
     assert interview.goals['startup_name'].status=='partial'
@@ -170,3 +172,29 @@ def test_correction_cannot_exceed_used_followup_budget() -> None:
     assert interview.goals['startup_name'].exhausted
     assert interview.goals['startup_name'].followups_used==1
     assert interview.current_goal!='startup_name'
+
+def test_funding_corrections_leave_round_question_and_score_evidence_open() -> None:
+    cfg = AgentConfig()
+    cfg.goals = [g for g in cfg.goals if g.key in ('fundraising', 'funding_amount', 'funding_round')]
+    cfg.match_profile = MatchProfile(rules=[
+        MatchRule(goal_key='funding_round', operator='one_of', accepted=['Pre-Seed']),
+        MatchRule(goal_key='funding_amount', operator='range', minimum=200000, maximum=1000000),
+    ])
+    interview = create_interview('a', cfg, 'voice')
+    answer(interview, 'fundraising', value='Ja', choice='Ja')
+    answer(interview, 'funding_amount', value='800000 EUR', number=800000)
+    assert interview.current_goal == 'funding_round'
+    for amount in (700000, 600000):
+        answer(interview, 'funding_amount', value=f'{amount} EUR', number=amount)
+        assert interview.current_goal == 'funding_round'
+        assert interview.goals['funding_round'].followups_used == 0
+    apply_turn(interview, Turn(id='question', text='Welche Art von Runde meinst du?', extraction=Extraction(answers=[
+        GoalAnswer(goal_key='funding_round', status='unknown', value='Unklar', quote='Welche Art von Runde meinst du?'),
+    ])))
+    assert interview.goals['funding_round'].status == 'open'
+    assert interview.current_goal == 'funding_round'
+    assert interview.goals['funding_round'].followups_used == 0
+    answer(interview, 'funding_round', value='Pre-Seed', choice='Pre-Seed')
+    report = analyze(interview)
+    assert report['score'] == report['coverage'] == report['completeness'] == 100
+    assert interview.goals['funding_amount'].number_value == 600000

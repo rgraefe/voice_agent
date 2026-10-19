@@ -5,6 +5,10 @@ from livekit.plugins import deepgram, elevenlabs
 from app.config import Settings
 
 
+# Vocabulary hints bias recognition; they do not replace or rewrite transcripts.
+INTERVIEW_TERMS = ["MVP", "Minimum Viable Product", "SaaS", "Pre-Seed", "Seed", "GmbH"]
+
+
 def create_stt(settings: Settings, *, language: str) -> stt.STT:
     """Create a session-owned recognizer; never silently switch providers on failure."""
     if language not in ('de', 'en'):
@@ -14,7 +18,7 @@ def create_stt(settings: Settings, *, language: str) -> stt.STT:
             raise ValueError('DEEPGRAM_API_KEY is required for Deepgram STT')
         return deepgram.STT(
             api_key=settings.deepgram_api_key, model='nova-3', language=language,
-            interim_results=True, smart_format=True, mip_opt_out=True,
+            interim_results=True, smart_format=True, mip_opt_out=True, keyterm=INTERVIEW_TERMS,
         )
     # Both plugins normalize provider-specific events to LiveKit's streaming STT interface.
     if settings.stt_provider == 'elevenlabs':
@@ -23,7 +27,7 @@ def create_stt(settings: Settings, *, language: str) -> stt.STT:
             raise ValueError('ELEVENLABS_API_KEY or ELEVENLABS_STT_API_KEY is required for ElevenLabs STT')
         return elevenlabs.STT(
             api_key=key, model='scribe_v2_realtime', language_code=language,
-            enable_logging=False, no_verbatim=False,
+            enable_logging=False, no_verbatim=False, keyterms=INTERVIEW_TERMS,
             # AgentSession receives continuous audio. Server VAD commits final
             # transcripts without requiring our controller to flush the stream.
             # LiveKit's local turn detector still decides when to answer.

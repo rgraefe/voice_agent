@@ -14,6 +14,8 @@ Read the files in this order: `package.json` and `vite.config.ts`, `src/api.ts`,
 
 The production API serves `frontend/dist`; changing TSX does not update that built output until you rebuild. Vite development mode updates source changes interactively. This explains why a browser refresh alone is sometimes insufficient.
 
+Run `npm run format` from `frontend/` to format all TypeScript and TSX source files, or `npm run format:check` to check formatting. The project uses Prettier with an 80-column target; long strings can still exceed it.
+
 ## 2. Shared contracts and HTTP
 
 Read [api.ts](../../frontend/src/api.ts) before JSX.
@@ -28,7 +30,7 @@ Interview exercise: follow one error from Python `ServiceError` to JSON, `api()`
 
 ## 3. App.tsx state ownership
 
-[App.tsx](../../frontend/src/App.tsx) currently combines orchestration and page rendering. Read the hooks and handlers first, then the JSX. The compact one-line rendering is harder to review than it needs to be; extracting page components is a reasonable next refactor, not a feature already implemented.
+[App.tsx](../../frontend/src/App.tsx) currently combines orchestration and page rendering. Read the hooks and handlers first, then the JSX. Prettier formats the JSX and statements across readable lines. Extracting page components is a reasonable next refactor, not a feature already implemented.
 
 | State | Meaning | Authority |
 | --- | --- | --- |

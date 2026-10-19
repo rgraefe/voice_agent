@@ -1,25 +1,363 @@
-import {useEffect,useState} from 'react';
-import {api,date,statusLabel,type Interview,type Report} from './api';
-const clock=(seconds:number)=>`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+import { useEffect, useState } from 'react';
+import { api, date, statusLabel, type Interview, type Report } from './api';
+const clock = (seconds: number) =>
+  `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 // Defer URL revocation until the browser has had a chance to begin the download.
-function download(text:string,name:string,type:string){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function download(text: string, name: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 // Null means no usable score, not a score of zero; show a dash to preserve that distinction.
-function Gauge({value,label,caption}:{value:number|null;label:string;caption:string}){return <div className="card score-card"><div className="score-ring" style={{background:`conic-gradient(var(--accent, #39735c) ${(value??0)*3.6}deg, #e9ede6 0deg)`}}><div><strong>{value===null?'—':value}</strong>{value!==null&&<small>/ 100</small>}</div></div><h3>{label}</h3><p>{caption}</p></div>;}
-export function InterviewReport({item}:{item:Interview}){
- const [report,setReport]=useState<Report|null>(null),[error,setError]=useState(''),[search,setSearch]=useState(''),[speaker,setSpeaker]=useState('all');
- // Ignore a request that finishes after the selected interview changes or the view unmounts.
- useEffect(()=>{let live=true;api<Report>('/interviews/'+item.id+'/analysis').then(r=>{if(live)setReport(r);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[item.id,item.transcript.length,item.status]);
- if(error)return <p role="alert">{error}</p>;if(!report)return <p>Auswertung wird geladen …</p>;
- // Search and speaker filters affect presentation only, never the stored transcript or scoring.
- const transcript=report.transcript.filter(t=>(speaker==='all'||speaker===t.role)&&t.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
- const words=report.statistics.words,totalWords=words.user+words.assistant;
- // Clear filters before scrolling so a referenced evidence entry is present in the rendered list.
- const evidence=(id:string|null)=>{setSearch('');setSpeaker('all');setTimeout(()=>{const el=document.getElementById('evidence-'+id);el?.scrollIntoView({behavior:'smooth',block:'center'});el?.focus({preventScroll:true});},0);};
- return <div className="report"><div className="page-heading"><div><span className="eyebrow">GESPRÄCHSERGEBNIS</span><h1>{item.goals?.startup_name?.value||'Euer Startup im Überblick.'}</h1><p>{date(item.created_at)} · {item.mode==='simulation'?'Text-Testlauf ohne KI':'Voice-Interview'} · {statusLabel[item.status]} · Konfiguration v{report.configuration_version}</p></div><button className="secondary" onClick={()=>download(JSON.stringify(report,null,2),'interview-'+item.id+'.json','application/json')}>Ergebnis herunterladen</button></div>
- <div className="score-grid"><Gauge value={report.score} label="Match zum Zielprofil" caption={!report.configured?'Noch kein Zielprofil mit Kriterien hinterlegt.':`${report.profile_name} · ${report.coverage===null?'Keine anwendbaren Kriterien':report.coverage===100?'Alle Kriterien belegt':'Vorläufig, Angaben fehlen'}`}/><Gauge value={report.coverage} label="Bewertbare Kriterien" caption="Gewichteter Anteil der Match-Kriterien mit einer vollständigen, belegten Antwort."/><Gauge value={report.completeness} label="Vollständigkeit" caption={`${report.answered_required} von ${report.total_required} relevanten Pflichtangaben geklärt.`}/></div>
- <p className="fine-print">Der Match beschreibt die Passung zum gespeicherten Zielprofil, keine allgemeine Startup-Qualität. Unbekannte Antworten zählen nicht als Ablehnung. Bei fehlenden Belegen ist der Score vorläufig.</p>
- {report.configured&&<section className="card report-section"><h2>So entsteht der Match</h2><p className="muted">Gewichtete Treffer ÷ Gewicht aller bewertbaren Kriterien × 100. Grenzen zählen einschließlich.</p><div className="table-scroll"><table><thead><tr><th>Kriterium</th><th>Ziel</th><th>Antwort</th><th>Gewicht</th><th>Bewertung</th></tr></thead><tbody>{report.rules.map(r=><tr key={r.goal_key}><th>{r.label}</th><td>{r.operator==='one_of'?r.accepted.join(', '):`${r.minimum??'offen'} – ${r.maximum??'offen'} ${r.unit}`}</td><td>{r.value||'Keine Angabe'}{r.evidence_turn&&<button className="inline-link" onClick={()=>evidence(r.evidence_turn)}>Beleg ansehen</button>}</td><td>{r.weight}</td><td><span className={'pill '+r.status}>{statusLabel[r.status]||r.status}</span></td></tr>)}</tbody></table></div></section>}
- <div className="report-columns"><section className="card report-section"><h2>Antworten nach Themen</h2>{report.topics.map(t=><div className="topic-bar" key={t.key}><div><span>{t.label}</span><strong>{t.answered} / {t.total}</strong></div><div className="progress"><div style={{width:(t.total?t.answered/t.total*100:0)+'%'}}/></div></div>)}<p className="fine-print">Vollständig beantwortete Ziele, einschließlich optionaler Fragen. Nicht relevante Ziele sind ausgenommen.</p></section><section className="card report-section"><h2>Das Gespräch in Zahlen</h2><div className="stat-grid"><div><strong>{clock(report.statistics.duration_seconds)}</strong><span>{item.ended_at?'Gesprächsdauer':'Bis zum letzten Beitrag'}</span></div><div><strong>{report.transcript.length}</strong><span>Beiträge</span></div><div><strong>{report.statistics.followups}</strong><span>Rückfragen</span></div><div><strong>{report.statistics.interruptions}</strong><span>Unterbrochene Beiträge</span></div></div><h3>Wortanteile im Transkript</h3><div className="word-share" role="img" aria-label={`Startup ${words.user} Wörter, Agent ${words.assistant} Wörter`}><div style={{width:(totalWords?words.user/totalWords*100:0)+'%'}}/></div><div className="section-top"><small>Startup · {words.user} Wörter</small><small>Agent · {words.assistant} Wörter</small></div><p className="fine-print">Wortanteile sind keine gemessene Sprechzeit. Das Transkript stammt bei Voice aus der Spracherkennung und kann Erkennungsfehler enthalten.</p></section></div>
- <section className="card report-section"><h2>Antworten & offene Punkte</h2>{report.goals.filter(g=>g.enabled).map(g=><details className="answer-detail" key={g.key}><summary><span>{g.label} {g.required&&<small>· Pflicht</small>}</span><span className="pill subtle">{statusLabel[g.status]}</span></summary><p>{g.value|| (g.status==='not_applicable'?'Die konfigurierte Bedingung trifft nicht zu.':g.status==='blocked'?'Die Voraussetzung ist noch ungeklärt.':'Noch keine Angabe.')}</p><p className="fine-print">Antwortkriterium: {g.criteria}</p>{g.quote&&<blockquote>„{g.quote}“ <button className="inline-link" onClick={()=>evidence(g.evidence_turn)}>Im Transkript</button></blockquote>}{g.exhausted&&<p className="fine-print">Rückfragen ausgeschöpft; vorhandene Teilantwort bleibt erhalten.</p>}</details>)}</section>
- <section className="card report-section"><div className="section-top"><h2>Vollständiges Transkript</h2><button className="secondary" onClick={()=>download(`Startup-Interview · ${date(item.created_at)}\n${report.transcript.map(t=>`[${clock(t.offset_seconds)}] ${t.role==='user'?'Startup':item.config.name}${t.interrupted?' (unterbrochen)':''}: ${t.text}`).join('\n\n')}`,'transkript-'+item.id+'.txt','text/plain;charset=utf-8')}>Transkript als Text</button></div><div className="transcript-filters"><label>Transkript durchsuchen<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Begriff suchen …"/></label><label>Sprecher<select value={speaker} onChange={e=>setSpeaker(e.target.value)}><option value="all">Alle Beiträge</option><option value="user">Startup</option><option value="assistant">Agent</option></select></label></div><div className="report-transcript">{transcript.map(t=><article tabIndex={-1} id={'evidence-'+t.id} className={'transcript-entry '+t.role} key={t.id}><div className="message-meta"><strong>{t.role==='user'?'Startup':item.config.name}</strong><time title={date(t.timestamp)}>{clock(t.offset_seconds)}</time>{t.interrupted&&<span className="pill subtle">unterbrochen</span>}</div><p>{t.text}</p></article>)}{!transcript.length&&<p className="muted">Keine passenden Beiträge.</p>}</div></section></div>;
+function Gauge({
+  value,
+  label,
+  caption,
+}: {
+  value: number | null;
+  label: string;
+  caption: string;
+}) {
+  return (
+    <div className="card score-card">
+      <div
+        className="score-ring"
+        style={{
+          background: `conic-gradient(var(--accent, #39735c) ${(value ?? 0) * 3.6}deg, #e9ede6 0deg)`,
+        }}
+      >
+        <div>
+          <strong>{value === null ? '—' : value}</strong>
+          {value !== null && <small>/ 100</small>}
+        </div>
+      </div>
+      <h3>{label}</h3>
+      <p>{caption}</p>
+    </div>
+  );
+}
+export function InterviewReport({ item }: { item: Interview }) {
+  const [report, setReport] = useState<Report | null>(null),
+    [error, setError] = useState(''),
+    [search, setSearch] = useState(''),
+    [speaker, setSpeaker] = useState('all');
+  // Ignore a request that finishes after the selected interview changes or the view unmounts.
+  useEffect(() => {
+    let live = true;
+    api<Report>('/interviews/' + item.id + '/analysis')
+      .then((r) => {
+        if (live) setReport(r);
+      })
+      .catch((e) => {
+        if (live) setError(e.message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [item.id, item.transcript.length, item.status]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!report) return <p>Auswertung wird geladen …</p>;
+  // Search and speaker filters affect presentation only, never the stored transcript or scoring.
+  const transcript = report.transcript.filter(
+    (t) =>
+      (speaker === 'all' || speaker === t.role) &&
+      t.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+  );
+  const words = report.statistics.words,
+    totalWords = words.user + words.assistant;
+  // Clear filters before scrolling so a referenced evidence entry is present in the rendered list.
+  const evidence = (id: string | null) => {
+    setSearch('');
+    setSpeaker('all');
+    setTimeout(() => {
+      const el = document.getElementById('evidence-' + id);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el?.focus({ preventScroll: true });
+    }, 0);
+  };
+  return (
+    <div className="report">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">GESPRÄCHSERGEBNIS</span>
+          <h1>
+            {item.goals?.startup_name?.value || 'Euer Startup im Überblick.'}
+          </h1>
+          <p>
+            {date(item.created_at)} ·{' '}
+            {item.mode === 'simulation'
+              ? 'Text-Testlauf ohne KI'
+              : 'Voice-Interview'}{' '}
+            · {statusLabel[item.status]} · Konfiguration v
+            {report.configuration_version}
+          </p>
+        </div>
+        <button
+          className="secondary"
+          onClick={() =>
+            download(
+              JSON.stringify(report, null, 2),
+              'interview-' + item.id + '.json',
+              'application/json',
+            )
+          }
+        >
+          Ergebnis herunterladen
+        </button>
+      </div>
+      <div className="score-grid">
+        <Gauge
+          value={report.score}
+          label="Match zum Zielprofil"
+          caption={
+            !report.configured
+              ? 'Noch kein Zielprofil mit Kriterien hinterlegt.'
+              : `${report.profile_name} · ${report.coverage === null ? 'Keine anwendbaren Kriterien' : report.coverage === 100 ? 'Alle Kriterien belegt' : 'Vorläufig, Angaben fehlen'}`
+          }
+        />
+        <Gauge
+          value={report.coverage}
+          label="Bewertbare Kriterien"
+          caption="Gewichteter Anteil der Match-Kriterien mit einer vollständigen, belegten Antwort."
+        />
+        <Gauge
+          value={report.completeness}
+          label="Vollständigkeit"
+          caption={`${report.answered_required} von ${report.total_required} relevanten Pflichtangaben geklärt.`}
+        />
+      </div>
+      <p className="fine-print">
+        Der Match beschreibt die Passung zum gespeicherten Zielprofil, keine
+        allgemeine Startup-Qualität. Unbekannte Antworten zählen nicht als
+        Ablehnung. Bei fehlenden Belegen ist der Score vorläufig.
+      </p>
+      {report.configured && (
+        <section className="card report-section">
+          <h2>So entsteht der Match</h2>
+          <p className="muted">
+            Gewichtete Treffer ÷ Gewicht aller bewertbaren Kriterien × 100.
+            Grenzen zählen einschließlich.
+          </p>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Kriterium</th>
+                  <th>Ziel</th>
+                  <th>Antwort</th>
+                  <th>Gewicht</th>
+                  <th>Bewertung</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rules.map((r) => (
+                  <tr key={r.goal_key}>
+                    <th>{r.label}</th>
+                    <td>
+                      {r.operator === 'one_of'
+                        ? r.accepted.join(', ')
+                        : `${r.minimum ?? 'offen'} – ${r.maximum ?? 'offen'} ${r.unit}`}
+                    </td>
+                    <td>
+                      {r.value || 'Keine Angabe'}
+                      {r.evidence_turn && (
+                        <button
+                          className="inline-link"
+                          onClick={() => evidence(r.evidence_turn)}
+                        >
+                          Beleg ansehen
+                        </button>
+                      )}
+                    </td>
+                    <td>{r.weight}</td>
+                    <td>
+                      <span className={'pill ' + r.status}>
+                        {statusLabel[r.status] || r.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      <div className="report-columns">
+        <section className="card report-section">
+          <h2>Antworten nach Themen</h2>
+          {report.topics.map((t) => (
+            <div className="topic-bar" key={t.key}>
+              <div>
+                <span>{t.label}</span>
+                <strong>
+                  {t.answered} / {t.total}
+                </strong>
+              </div>
+              <div className="progress">
+                <div
+                  style={{
+                    width: (t.total ? (t.answered / t.total) * 100 : 0) + '%',
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+          <p className="fine-print">
+            Vollständig beantwortete Ziele, einschließlich optionaler Fragen.
+            Nicht relevante Ziele sind ausgenommen.
+          </p>
+        </section>
+        <section className="card report-section">
+          <h2>Das Gespräch in Zahlen</h2>
+          <div className="stat-grid">
+            <div>
+              <strong>{clock(report.statistics.duration_seconds)}</strong>
+              <span>
+                {item.ended_at ? 'Gesprächsdauer' : 'Bis zum letzten Beitrag'}
+              </span>
+            </div>
+            <div>
+              <strong>{report.transcript.length}</strong>
+              <span>Beiträge</span>
+            </div>
+            <div>
+              <strong>{report.statistics.followups}</strong>
+              <span>Rückfragen</span>
+            </div>
+            <div>
+              <strong>{report.statistics.interruptions}</strong>
+              <span>Unterbrochene Beiträge</span>
+            </div>
+          </div>
+          <h3>Wortanteile im Transkript</h3>
+          <div
+            className="word-share"
+            role="img"
+            aria-label={`Startup ${words.user} Wörter, Agent ${words.assistant} Wörter`}
+          >
+            <div
+              style={{
+                width: (totalWords ? (words.user / totalWords) * 100 : 0) + '%',
+              }}
+            />
+          </div>
+          <div className="section-top">
+            <small>Startup · {words.user} Wörter</small>
+            <small>Agent · {words.assistant} Wörter</small>
+          </div>
+          <p className="fine-print">
+            Wortanteile sind keine gemessene Sprechzeit. Das Transkript stammt
+            bei Voice aus der Spracherkennung und kann Erkennungsfehler
+            enthalten.
+          </p>
+        </section>
+      </div>
+      <section className="card report-section">
+        <h2>Antworten & offene Punkte</h2>
+        {report.goals
+          .filter((g) => g.enabled)
+          .map((g) => (
+            <details className="answer-detail" key={g.key}>
+              <summary>
+                <span>
+                  {g.label} {g.required && <small>· Pflicht</small>}
+                </span>
+                <span className="pill subtle">{statusLabel[g.status]}</span>
+              </summary>
+              <p>
+                {g.value ||
+                  (g.status === 'not_applicable'
+                    ? 'Die konfigurierte Bedingung trifft nicht zu.'
+                    : g.status === 'blocked'
+                      ? 'Die Voraussetzung ist noch ungeklärt.'
+                      : 'Noch keine Angabe.')}
+              </p>
+              <p className="fine-print">Antwortkriterium: {g.criteria}</p>
+              {g.quote && (
+                <blockquote>
+                  „{g.quote}“{' '}
+                  <button
+                    className="inline-link"
+                    onClick={() => evidence(g.evidence_turn)}
+                  >
+                    Im Transkript
+                  </button>
+                </blockquote>
+              )}
+              {g.exhausted && (
+                <p className="fine-print">
+                  Rückfragen ausgeschöpft; vorhandene Teilantwort bleibt
+                  erhalten.
+                </p>
+              )}
+            </details>
+          ))}
+      </section>
+      <section className="card report-section">
+        <div className="section-top">
+          <h2>Vollständiges Transkript</h2>
+          <button
+            className="secondary"
+            onClick={() =>
+              download(
+                `Startup-Interview · ${date(item.created_at)}\n${report.transcript.map((t) => `[${clock(t.offset_seconds)}] ${t.role === 'user' ? 'Startup' : item.config.name}${t.interrupted ? ' (unterbrochen)' : ''}: ${t.text}`).join('\n\n')}`,
+                'transkript-' + item.id + '.txt',
+                'text/plain;charset=utf-8',
+              )
+            }
+          >
+            Transkript als Text
+          </button>
+        </div>
+        <div className="transcript-filters">
+          <label>
+            Transkript durchsuchen
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Begriff suchen …"
+            />
+          </label>
+          <label>
+            Sprecher
+            <select
+              value={speaker}
+              onChange={(e) => setSpeaker(e.target.value)}
+            >
+              <option value="all">Alle Beiträge</option>
+              <option value="user">Startup</option>
+              <option value="assistant">Agent</option>
+            </select>
+          </label>
+        </div>
+        <div className="report-transcript">
+          {transcript.map((t) => (
+            <article
+              tabIndex={-1}
+              id={'evidence-' + t.id}
+              className={'transcript-entry ' + t.role}
+              key={t.id}
+            >
+              <div className="message-meta">
+                <strong>
+                  {t.role === 'user' ? 'Startup' : item.config.name}
+                </strong>
+                <time title={date(t.timestamp)}>{clock(t.offset_seconds)}</time>
+                {t.interrupted && (
+                  <span className="pill subtle">unterbrochen</span>
+                )}
+              </div>
+              <p>{t.text}</p>
+            </article>
+          ))}
+          {!transcript.length && (
+            <p className="muted">Keine passenden Beiträge.</p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
 }

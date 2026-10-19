@@ -1,6 +1,7 @@
 flowchart LR
-    U[Recognized statement] --> L[AI proposes typed answers]
-    L --> V[Validate structure and evidence]
-    V --> P[Deterministic planner]
-    P --> S[Save canonical state]
-    S --> R[Next reply]
+    U[Founder statement] --> L[OpenAI extracts answers and evidence]
+    L --> V[Backend validates and updates state]
+    V --> P[Backend selects goal and configured question]
+    P --> S[Save interview before returning reply]
+    S --> R[Optional AI acknowledgment plus fixed question]
+    R --> T[ElevenLabs speaks the reply]

@@ -6,7 +6,7 @@ The Python system has two running services. `app/` is the authoritative HTTP bac
 
 The detailed sequence below follows a real **voice interview**, from opening the frontend to reopening its saved report. It shows one loop for all answer goals, including follow-ups and summary corrections. The participants are logical responsibilities: the planner and analysis functions run inside the API process, not in separate services.
 
-The diagram uses German labels to support the interview presentation. Download the editable [Mermaid source](diagrams/12-interview-full-sequence.mmd) to render it separately or use it for slides. The optional admin configuration phase is a prerequisite: the administrator publishes settings before the founder starts; each interview saves its own snapshot.
+The diagram uses German labels to support the interview presentation. Participant labels are repeated as notes at the start of each of the five phases, so the full sequence stays in one diagram while remaining navigable when zoomed in. Download the editable [Mermaid source](diagrams/12-interview-full-sequence.mmd) to render it separately or use it for slides. The optional admin configuration phase is a prerequisite: the administrator publishes settings before the founder starts; each interview saves its own snapshot.
 
 ```mermaid
 sequenceDiagram
@@ -23,6 +23,16 @@ sequenceDiagram
     participant T as ElevenLabs TTS
 
     Note over U,D: 1. Einstieg und Anmeldung — veröffentlichte Admin-Konfiguration existiert
+    Note over U: Startup / Gründer
+    Note over F: React-Frontend / Browser
+    Note over A: FastAPI / Auth
+    Note over P: Interview / Planner / Analysis
+    Note over D: SQLite / Firestore
+    Note over L: LiveKit-Raum / WebRTC
+    Note over W: Python Voice-Worker
+    Note over S: Deepgram / ElevenLabs STT
+    Note over M: OpenAI / Extractor
+    Note over T: ElevenLabs TTS
     U->>F: Seite öffnen (optional mit Einladungslink)
     F->>A: GET /api/bootstrap
     A->>D: Veröffentlichte Konfiguration lesen
@@ -41,6 +51,7 @@ sequenceDiagram
     A->>D: Eigene Interviews laden (Admin darf alle sehen)
     D-->>A: Interviewdaten
     A-->>F: Historie mit Zeitstempeln und Status
+    Note over F,A: Menü Gesprächsverlauf nur für Admins sichtbar, API-Besitzerprüfung bleibt bestehen
 
     opt Freiwilliger Mikrofontest vor dem Interview
         U->>F: Mikrofon testen
@@ -51,6 +62,16 @@ sequenceDiagram
     end
 
     Note over U,W: 2. Interview anlegen, verbinden und erste Frage sprechen
+    Note over U: Startup / Gründer
+    Note over F: React-Frontend / Browser
+    Note over A: FastAPI / Auth
+    Note over P: Interview / Planner / Analysis
+    Note over D: SQLite / Firestore
+    Note over L: LiveKit-Raum / WebRTC
+    Note over W: Python Voice-Worker
+    Note over S: Deepgram / ElevenLabs STT
+    Note over M: OpenAI / Extractor
+    Note over T: ElevenLabs TTS
     U->>F: Interview starten
     F->>A: POST /api/interviews (voice, eindeutige request_id)
     A->>A: Sitzung und Voice-Konfiguration prüfen
@@ -61,7 +82,7 @@ sequenceDiagram
     opt Neue request_id
         A->>P: create_interview → create(owner, config, voice)
         P->>P: GoalStates initialisieren, select_next, ask
-        P-->>A: Interview mit Begrüßung, erster Frage und Config-Snapshot
+        P-->>A: Interview mit Ablaufhinweisen, Korrekturoptionen, erster Frage und Config-Snapshot
     end
     A->>D: Interview speichern / Transaktion abschließen
     D-->>A: Gespeicherter Zustand
@@ -79,6 +100,7 @@ sequenceDiagram
     D-->>A: Gespeicherter Zustand und Konfiguration
     A-->>W: Interview
     W->>W: Raum-ID und Status prüfen, STT-Factory, Extractor und TTS konfigurieren
+    Note over W,S: STT erhält Fachbegriffe wie MVP, SaaS und GmbH als Erkennungshinweise, keine Garantie
     Note over W: Lokale VAD-/Turn-Detection-Modelle wurden im Prozess vorgewärmt
     F->>F: startAudio, setMicrophoneEnabled(true)
     F->>L: Mikrofontrack veröffentlichen
@@ -87,17 +109,35 @@ sequenceDiagram
     L-->>F: Agent verbunden, Remote-Audiotrack abonnieren
     F->>F: Audiotrack an Wiedergabe anhängen, Agent-bereit anzeigen
     Note over F,L: Kein Agent nach 30 s → Verbindung schließen und Interview stoppen
-    W->>T: session.say(last_reply): Begrüßung und erste Frage
+    W->>T: session.say: Einführung und Ankündigung der ersten Frage
     T-->>W: Gestreamte Audioabschnitte
     W-->>L: Agent-Audio veröffentlichen
     L-->>F: Remote-Audio über WebRTC
-    F-->>U: Begrüßung und erste Frage hörbar
+    F-->>U: Einführung und Ankündigung hörbar
+    W->>W: Wiedergabe abwarten, dann 0,8 s Pause
+    opt Nicht unterbrochen, Revision unverändert, active und Founder spricht nicht
+        W->>T: session.say(current_prompt): erste Frage
+        T-->>W: Frage als Audiostream
+        W-->>L: Agent-Audio
+        L-->>F: Remote-Audio
+        F-->>U: Erste Frage hörbar
+    end
     W->>A: POST /api/internal/interviews/{id}/speech
-    A->>D: Tatsächlich gesprochenen Beitrag nach ID speichern
+    A->>D: Session-Transkriptbeitrag nach ID speichern
     D-->>A: Gespeichert
     A-->>W: Kanonischer Zustand
 
     Note over U,T: 3. Eine Schleife für alle Antworten, Rückfragen und die Abschlussprüfung
+    Note over U: Startup / Gründer
+    Note over F: React-Frontend / Browser
+    Note over A: FastAPI / Auth
+    Note over P: Interview / Planner / Analysis
+    Note over D: SQLite / Firestore
+    Note over L: LiveKit-Raum / WebRTC
+    Note over W: Python Voice-Worker
+    Note over S: Deepgram / ElevenLabs STT
+    Note over M: OpenAI / Extractor
+    Note over T: ElevenLabs TTS
     par Sprachdialog
         loop Solange das Interview aktiv oder in review ist
             U->>F: Antwort sprechen / Gegenfrage / Korrektur / Bestätigung
@@ -118,24 +158,37 @@ sequenceDiagram
             W->>W: on_user_turn_completed / llm_node: turn_id und Text übernehmen
             W->>M: extract(Text, Zustand): Ziele, Kriterien, bisherige Antworten, Tonalität
             Note over W,M: Genau ein strukturierter Aufruf, keine Token-Streaming-Antwort
-            M-->>W: Extraction: answers, Belegzitate, acknowledgment, confirmed_summary
+            M-->>W: Extraction: answers, Belegzitate, acknowledgment, dialogue_act, confirmed_summary
+            Note over M: KI bewertet Vollständigkeit nach Kriterien, vage oder unbelegte Angaben sollen partial bleiben
+            Note over M: value sprachlich glätten, quote unverändert, Zahlen und Unsicherheiten bewahren
+            Note over M,P: Belegprüfung sichert Textvorkommen, keine unabhängige semantische Richtigkeit
             W->>W: Pydantic prüft die Struktur des Tool-Ergebnisses
             W->>A: POST /api/internal/interviews/{id}/turns (Turn)
             A->>A: Worker authentifizieren und Eingabe validieren
-            A->>D: Atomare Änderung beginnen, aktuellen Interviewstand lesen
+            A->>A: mutate_interview(id, Callback)
+            A->>D: store.update: atomare Änderung beginnen, aktuellen Interviewstand lesen
             D-->>A: Aktueller Zustand
             A->>P: apply_turn → advance(interview, turn)
             P->>P: ID / Inhalt, Status, Turn-Limit und alle Belege prüfen
             Note over P: Identische Wiederholung ist wirkungslos, anderer Inhalt zur selben ID ist Konflikt
             P->>P: Antworten und Korrekturen übernehmen, Nutzertranskript ergänzen
-            P->>P: applicability und select_next bestimmen nächste Aktion
-            alt Unterbrochene Frage muss wiederholt werden
+            P->>P: Dialogabsicht, aktuelle Frage und Anwendbarkeit prüfen
+            alt Review mit Wiederholungswunsch oder Frage
+                P->>P: Vollständige Zusammenfassung wiederholen oder fehlende Pflichtziele benennen
+                Note over P: Kein Abschluss durch eine Frage, bei repeat auch offene Angaben mit vorlesen
+            else Nur andere Antwortziele ergänzt oder korrigiert
+                P->>P: Aktuelle Frage erhalten und wiederholen, Budget unverändert
+            else Wiederholung oder Erklärung der offenen Frage gewünscht
+                P->>P: Frage wiederholen oder anhand der Kriterien erklären, Budget unverändert
+            else Unterbrochene Frage muss wiederholt werden
                 P->>P: Frage wiederholen, kein zusätzliches Rückfragebudget verbrauchen
             else Relevantes Antwortziel noch offen
-                P->>P: ask: erste Frage oder konfigurierte Rückfrage wählen
+                P->>P: select_next und ask: erste Frage oder konfigurierte Rückfrage wählen
+                Note over P: Mehrere erlaubte Rückfragen verwenden denselben konfigurierten Text
                 Note over P: Pflichtziele zuerst, geklärte Ziele überspringen, Rückfragen begrenzen
             else Kein Ziel offen, aber noch keine reine Bestätigung
-                P->>P: status=review, spoken_summary und Bestätigungsfrage
+                P->>P: status=review, Übergang zur Zusammenfassung, spoken_summary und Bestätigungsfrage
+                Note over P: Nach Korrektur erneut vollständige Zusammenfassung mit kurzem Aktualisierungshinweis
                 Note over P: Neue Antworten/Korrekturen verhindern gleichzeitigen Abschluss
             else In review ausdrücklich bestätigt, ohne neue Antworten
                 P->>P: status=completed, ended_at setzen, Abschlusstext wählen
@@ -147,11 +200,17 @@ sequenceDiagram
             A-->>W: Kanonisch gespeichertes Interview
             W->>W: Eigenen Zustand ersetzen, last_reply an TTS weitergeben
             W->>T: Nächste Frage / Rückfrage / Zusammenfassung / Abschluss
-            T-->>W: Audio streamen
+            alt TTS liefert Audio
+                T-->>W: Audio streamen
+            else TTS scheitert, z.B. Kontingent aufgebraucht
+                T-->>W: Anbieterfehler oder keine Audioframes
+                Note over W,F: Aktuelle Grenze: keine verlässliche verständliche TTS-Fehlermeldung im Frontend
+                Note over W,A: Session kann Text ohne Audio liefern, Transkripteintrag beweist keine hörbare Ausgabe
+            end
             W-->>L: Agent-Audio
             L-->>F: Audio und Sprecherstatus
-            F-->>U: Antwort hörbar, Sprechstatus sichtbar
-            W->>A: POST /speech für tatsächlich gesprochene Agent-Ausgabe
+            F-->>U: Antwort bei erfolgreicher Audioausgabe hörbar, Sprechstatus sichtbar
+            W->>A: POST /speech für Session-Transkript der Agent-Ausgabe
             A->>D: Transkript nach ID aktualisieren, Zeitstempel erhalten
             A-->>W: Gespeicherter Zustand
             Note over W,A: Hintergrundcallbacks melden außerdem /metrics: LLM, STT, TTS, Latenz, Fehler
@@ -176,6 +235,16 @@ sequenceDiagram
     end
 
     Note over U,D: 4. Abschluss oder vorzeitiges Beenden
+    Note over U: Startup / Gründer
+    Note over F: React-Frontend / Browser
+    Note over A: FastAPI / Auth
+    Note over P: Interview / Planner / Analysis
+    Note over D: SQLite / Firestore
+    Note over L: LiveKit-Raum / WebRTC
+    Note over W: Python Voice-Worker
+    Note over S: Deepgram / ElevenLabs STT
+    Note over M: OpenAI / Extractor
+    Note over T: ElevenLabs TTS
     alt Regulär bestätigt und gespeichert
         Note over A,D: completed und ended_at wurden bereits in der Turn-Transaktion gespeichert
         W->>W: Watchdog erkennt completed, wartet 5 s für Abschlussaudio
@@ -211,12 +280,27 @@ sequenceDiagram
     Note over F,A: Bei unerwarteter Trennung lädt der /stop-Rückgabewert den Endzustand nach
 
     Note over U,D: 5. Ergebnis, Transkript, Export und spätere Historie
+    Note over U: Startup / Gründer
+    Note over F: React-Frontend / Browser
+    Note over A: FastAPI / Auth
+    Note over P: Interview / Planner / Analysis
+    Note over D: SQLite / Firestore
+    Note over L: LiveKit-Raum / WebRTC
+    Note over W: Python Voice-Worker
+    Note over S: Deepgram / ElevenLabs STT
+    Note over M: OpenAI / Extractor
+    Note over T: ElevenLabs TTS
     U->>F: Auswertung und Transkript öffnen
     F->>A: GET /api/interviews/{id}/analysis
     A->>D: Interview mit ursprünglichem Config-Snapshot laden
     D-->>A: Gespeicherte Antworten und Transkript
     A->>P: analyze(interview)
-    P->>P: Vollständigkeit, Match, Coverage, Themenfortschritt und Statistiken berechnen
+    P->>P: Vollständigkeit aus answered-Pflichtzielen berechnen
+    P->>P: Match-Regeln deterministisch prüfen: Kategorie in accepted oder Zahl im Bereich
+    Note over P: Freitext wie Team oder Traktion wird nicht direkt auf Match bewertet
+    P->>P: Match aus bekannten Gewichten, Coverage aus bekannten zu relevanten Gewichten
+    Note over P: Unbekannt ist kein negativer Match, ohne konfigurierte Regeln kein Match-Score
+    P->>P: Themenfortschritt und Statistiken berechnen
     P-->>A: AnalysisReport mit Belegen und chronologischem Transkript
     A-->>F: Bericht (kein zusätzlicher KI-Aufruf)
     F-->>U: Kennzahlen, Grafiken, Antworten und durchsuchbares Transkript
@@ -227,7 +311,7 @@ sequenceDiagram
         A-->>F: Strukturierte Ergebnisdaten
         F-->>U: JSON-Datei herunterladen
     end
-    opt Gespräch später erneut öffnen
+    opt Admin öffnet ein Gespräch später erneut über die Historie
         U->>F: Gesprächsverlauf öffnen
         F->>A: GET /api/interviews
         A->>D: Sichtbare Interviews nach Besitzer laden
@@ -251,7 +335,7 @@ sequenceDiagram
 
 The `par` branches represent concurrent activities, not synchronized barriers. Watchdog, transcript callbacks, browser polling, and disconnect events may overlap. The diagram groups them for readability; exact event arrival order is not guaranteed. The worker schedules speech persistence in the background and drains outstanding tasks on shutdown.
 
-The 30-second frontend timer waits for the agent to join the room; it is **not** an answer timeout. The extractor uses a 7-second timeout with no automatic model retries. Worker-to-backend requests have an 8-second timeout and retry once after a network error or timeout with the same payload. If extraction or turn processing fails, the worker attempts to retain the user transcript and speaks a rotating retry phrase; after two consecutive failures, it attempts to stop the interview. If the backend is unreachable, it cannot guarantee that the final status was persisted. These failure messages bypass normal question selection and do not claim a successful write.
+The 30-second frontend timer waits for the agent to join the room; it is **not** an answer timeout. The extractor uses a 7-second timeout with no automatic model retries. Worker-to-backend requests have an 8-second timeout and retry once after a network error or timeout with the same payload. If extraction or turn processing fails, the worker attempts to retain the user transcript and speaks a rotating retry phrase; after repeated failures, it offers another attempt or a manual stop without automatically ending the interview. The current question and clarification budget remain unchanged for rejected turns. After an uncertain write, it reads the backend state and checks the processed turn ID before announcing success. If the backend is unreachable, it cannot guarantee that the final status was persisted. These failure messages bypass normal question selection and do not claim a successful write.
 
 The five-second wait on confirmed completion gives closing audio time to finish; it does not verify that the browser played the entire closing message. Silence by itself is not treated as an answer or confirmation. The configured maximum interview duration limits the session; there is no separate scripted “Are you still there?” silence timer.
 
@@ -425,7 +509,7 @@ The worker's `Interviewer.llm_node()` is an async generator: it can await extrac
 
 `entrypoint()` validates room identity, loads the interview, creates providers and starts the session. Prewarming loads Silero VAD and the local end-of-turn model. Turn detection, interruption thresholds and endpointing delays work together; none alone solves every pause or barge-in case. The name question has at least 1.2 seconds of endpointing delay. Other questions use configured pauses.
 
-Callbacks record actual speech and metrics. Background tasks are retained so shutdown can await them. The watchdog polls every two seconds, checks duration and terminal state, and closes the session. Repeated extraction/backend failures stop the interview after two consecutive failures; the first retry phrase rotates without an additional LLM call. This wording improvement does not fix the underlying failure.
+Callbacks record actual speech and metrics. Background tasks are retained so shutdown can await them. The watchdog polls every two seconds, checks duration and terminal state, and closes the session. Repeated extraction/turn-processing failures retain the interview and offer another attempt or manual stop. The first retry phrase rotates without an additional LLM call. Diagnostic warnings identify the processing stage, safe error category and correlation IDs without exception bodies. The watchdog tolerates two consecutive transient polling failures and closes on the third; authorization and other permanent HTTP failures close immediately. A successful poll resets that counter. The duration limit still applies.
 
 ## 9. What you can and cannot claim
 

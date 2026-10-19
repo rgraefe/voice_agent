@@ -1,0 +1,31 @@
+sequenceDiagram
+    actor U as Startup
+    participant B as Browser
+    participant L as LiveKit
+    participant W as Voice-Worker
+    participant S as Speech-to-Text
+    participant M as OpenAI
+    participant A as Backend + Speicher
+    participant T as ElevenLabs TTS
+
+    Note over U,T: Eine Frage wurde bereits gestellt – eine Antwort und die nächste Agent-Reaktion
+    U->>B: Antwort sprechen
+    B->>L: Mikrofon-Audio
+    L->>W: Audio übertragen
+    W->>S: Sprache erkennen lassen
+    S-->>W: Erkannter Text
+    W->>W: Ende des Nutzerbeitrags erkennen
+    W->>M: Text, Antwortziele, Kriterien und bisheriger Zustand
+    M-->>W: Strukturierte Antworten, Belege, Vollständigkeit und Dialogabsicht
+    Note over M: KI interpretiert die Antwort, wählt nicht die nächste Frage
+    W->>A: Auswertung zur Verarbeitung senden
+    A->>A: Belege und Daten prüfen, Interviewzustand aktualisieren
+    A->>A: Offenes Ziel und konfigurierte Frage oder Rückfrage wählen
+    Note over A: Backend steuert Reihenfolge und Rückfragebudget
+    A->>A: Geänderten Zustand atomar speichern
+    A-->>W: Gespeicherter Zustand und Antworttext
+    W->>T: Antworttext sprechen lassen
+    T-->>W: Audio streamen
+    W-->>L: Agent-Audio
+    L-->>B: Audio übertragen
+    B-->>U: Nächste Frage oder Rückfrage hören

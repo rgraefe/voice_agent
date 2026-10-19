@@ -25,6 +25,7 @@ from app.config import Settings
 from app.models import Extraction, Interview, Turn
 from voice.extraction import Extractor
 from voice.stt import create_stt
+from voice.diagnostics import log_failure, transient_backend_error
 
 load_dotenv()
 settings = Settings()
@@ -119,7 +120,22 @@ class Interviewer(Agent):
         return message
 
     async def on_enter(self) -> None:
-        await self.session.say(self.state.last_reply, allow_interruptions=True)
+        prompt = self.state.current_prompt
+        reply = self.state.last_reply
+        if not prompt or not reply.endswith(prompt) or reply == prompt:
+            await self.session.say(reply, allow_interruptions=True)
+            return
+        revision = self.state.revision
+        # Wait for actual playback before pausing; punctuation alone is not a reliable TTS pause.
+        greeting = self.session.say(reply[:-len(prompt)].rstrip(), allow_interruptions=True)
+        await greeting
+        if greeting.interrupted:
+            return
+        await asyncio.sleep(0.8)
+        # Do not speak an obsolete opening question over an early founder response.
+        if (self.state.revision == revision and self.state.status == 'active'
+                and self.session.user_state != 'speaking' and not greeting.interrupted):
+            await self.session.say(prompt, allow_interruptions=True)
 
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         self.pending_turn = (new_message.id, new_message.text_content or '')
@@ -136,12 +152,14 @@ class Interviewer(Agent):
         if not text.strip():
             return
         started = time.perf_counter()
+        stage = 'extraction'
         try:
             state = self.state
             if state.status not in ('active', 'review'):
                 return
             extraction, usage = await self.extractor.extract(text, state)
             turn = Turn(id=turn_id, text=text, extraction=extraction, timestamp=datetime.fromtimestamp(latest.created_at, timezone.utc) if latest is not None else None)
+            stage = 'save_turn'
             self.state = Interview.model_validate(await self.backend.request('POST', '/turns', turn.model_dump(mode='json')))
             self.failures = 0
             # No second LLM roundtrip: publish the canonical next question immediately to streaming TTS.
@@ -150,23 +168,38 @@ class Interviewer(Agent):
             try:
                 await self.backend.request('POST', '/metrics', {'id': turn_id + '-llm', 'kind': 'llm',
                     'values': {**usage, 'controller_seconds': controller_seconds}})
-            except httpx.HTTPError:
-                pass
-        except Exception:
+            except Exception as error:
+                log_failure('metrics', error, self.state.id, turn_id)
+        except Exception as error:
             # Do not print exception bodies: providers may include transcript or credentials.
             self.failures += 1
+            log_failure(stage, error, self.state.id, turn_id, self.failures)
+            # A timed-out write may already have committed. Read before asking for a
+            # repetition, and only announce success when the backend confirms this ID.
+            if stage == 'save_turn':
+                try:
+                    current = Interview.model_validate(await self.backend.request('GET'))
+                    self.state = current
+                    if turn_id in current.processed_turns:
+                        self.failures = 0
+                        yield current.last_reply
+                        return
+                    if current.status not in ('active', 'review'):
+                        return
+                except Exception as recovery_error:
+                    log_failure('reconcile_turn', recovery_error, self.state.id, turn_id)
             try:
                 await self.backend.request('POST', '/speech', {'id': turn_id, 'role': 'user', 'text': text, 'interrupted': False})
-            except httpx.HTTPError:
-                pass
+            except Exception as persistence_error:
+                log_failure('save_failed_speech', persistence_error, self.state.id, turn_id)
             de = self.state.config.language == 'de'
             if self.failures >= 2:
-                try:
-                    await self.backend.request('POST', '/stop')
-                except httpx.HTTPError:
-                    pass
-                yield ('Die Verbindung ist gerade nicht zuverlässig. Bitte beende das Gespräch und versuche es später erneut.' if de
-                       else 'The connection is not reliable right now. Please end the interview and try again later.')
+                # Keep the question/budget intact. No automatic stop and no retry loop
+                # consuming provider credits; the founder decides whether to try again.
+                yield ('Bei mir hakt die Verarbeitung leider noch. Wir bleiben bei dieser Frage. '
+                       'Du kannst deine Antwort nochmal sagen oder das Gespräch über Stopp beenden.' if de
+                       else 'I am still having trouble processing that. We will stay on this question. '
+                       'You can say your answer again or end the interview using Stop.')
             else:
                 yield self.retry_message()
 
@@ -176,13 +209,13 @@ async def entrypoint(ctx: JobContext) -> None:
     interview_id = json.loads(ctx.job.metadata)['interview_id']
     if ctx.room.name != 'interview-' + interview_id:
         raise ValueError('Room/session mismatch')
-    backend = Backend(interview_id)
+    backend = await asyncio.to_thread(Backend, interview_id)
     state = Interview.model_validate(await backend.request('GET'))
     if state.status not in ('active', 'review'):
         await backend.client.aclose()
         return
     cfg = state.config
-    extractor = Extractor(settings.openai_api_key, settings.llm_model)
+    extractor = await asyncio.to_thread(Extractor, settings.openai_api_key, settings.llm_model)
     agent = Interviewer(state, backend, extractor)
     session: AgentSession[None] = AgentSession(
         stt=create_stt(settings, language=cfg.language),
@@ -202,8 +235,10 @@ async def entrypoint(ctx: JobContext) -> None:
         tasks.add(task)
         def done(t: asyncio.Task[Document]) -> None:
             tasks.discard(t)
-            if not t.cancelled() and t.exception():
-                logging.getLogger('founder').warning('Background session event could not be persisted')
+            if not t.cancelled():
+                error = t.exception()
+                if error is not None:
+                    log_failure('background_persistence', error, interview_id)
         task.add_done_callback(done)
 
     @session.on('conversation_item_added')
@@ -243,15 +278,25 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on('error')
     def error(event: ErrorEvent) -> None:
+        # SDK error objects can contain audio text: log only the pipeline component.
+        source = getattr(event.error, 'type', '')
+        component = source if source in ('tts_error', 'stt_error', 'llm_error') else 'pipeline_error'
+        logging.getLogger('founder').warning('Voice pipeline failure component=%s interview=%s', component, interview_id)
         schedule(backend.request('POST', '/metrics', {'id': uuid4().hex, 'kind': 'error', 'values': {'count': 1}}))
 
     # Observe server-side stops and duration limits even if the browser disconnects unexpectedly.
     async def watchdog() -> None:
         deadline = time.monotonic() + cfg.max_minutes * 60
+        failures = 0
         while True:
             await asyncio.sleep(2)
             try:
+                if time.monotonic() > deadline:
+                    await session.aclose()
+                    ctx.shutdown(reason='interview time limit')
+                    return
                 current = await backend.request('GET')
+                failures = 0
                 if current['status'] in ('completed', 'incomplete') or time.monotonic() > deadline:
                     if current['status'] == 'completed':
                         await asyncio.sleep(5)  # allow the short closing audio to finish
@@ -259,7 +304,11 @@ async def entrypoint(ctx: JobContext) -> None:
                     await backend.request('POST', '/stop')
                     ctx.shutdown(reason='interview finished')
                     return
-            except httpx.HTTPError:
+            except httpx.HTTPError as error:
+                failures += 1
+                log_failure('watchdog', error, interview_id, failures=failures)
+                if transient_backend_error(error) and failures < 3:
+                    continue
                 await session.aclose()
                 ctx.shutdown(reason='backend unavailable')
                 return

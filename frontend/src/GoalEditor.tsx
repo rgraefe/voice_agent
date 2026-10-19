@@ -1,16 +1,424 @@
-import type {Config,Goal,MatchRule} from './api';
-export function GoalEditor({config,onChange}:{config:Config;onChange:(c:Config)=>void}){
- // Keep edits immutable so the parent draft rerenders without mutating a published snapshot.
- const update=(key:string,change:Partial<Goal>)=>onChange({...config,goals:config.goals.map(g=>g.key===key?{...g,...change}:g)});
- // Ordering affects question priority and allowed prerequisite references; publication validates it.
- const move=(i:number,d:number)=>{const goals=[...config.goals];[goals[i],goals[i+d]]=[goals[i+d],goals[i]];onChange({...config,goals});};
- return <section className="card settings-card"><div className="section-top"><h2>Antwortziele & Gesprächssteuerung</h2><span className="pill">{config.goals.filter(g=>g.enabled).length} aktiv</span></div><p className="muted">Du bestimmst, was geklärt werden soll. Der Agent überspringt bereits beantwortete Ziele und fragt gezielt nach. Pflichtziele haben Vorrang. Formuliere Fragen in der gewählten Sprache.</p><div className="topic-editor">{config.goals.map((g,i)=><details key={g.key}><summary><span className="number">{i+1}</span>{g.label}<small>{!g.enabled?'Inaktiv':g.required?'Pflicht':'Optional'}</small></summary><div className="goal-actions"><label className="check-label"><input type="checkbox" checked={g.enabled} onChange={e=>update(g.key,{enabled:e.target.checked})}/>Aktiv</label><label className="check-label"><input type="checkbox" checked={g.required} onChange={e=>update(g.key,{required:e.target.checked})}/>Pflichtangabe</label><button className="secondary" disabled={i===0} onClick={()=>move(i,-1)} aria-label={g.label+' nach oben'}>↑</button><button className="secondary" disabled={i===config.goals.length-1} onClick={()=>move(i,1)} aria-label={g.label+' nach unten'}>↓</button></div><label>Bezeichnung<input value={g.label} onChange={e=>update(g.key,{label:e.target.value})}/></label><label>Themenbereich<select value={g.topic} onChange={e=>update(g.key,{topic:e.target.value})}>{config.topics.map(t=><option key={t.key} value={t.key}>{t.title}</option>)}</select></label><label>Wann reicht die Antwort aus?<textarea value={g.criteria} onChange={e=>update(g.key,{criteria:e.target.value})}/></label><label>Frage<textarea value={g.question} onChange={e=>update(g.key,{question:e.target.value})}/></label><label>Gezielte Rückfrage<textarea value={g.clarification} onChange={e=>update(g.key,{clarification:e.target.value})}/></label><div className="field-grid"><label>Maximale Rückfragen<select value={g.max_followups} onChange={e=>update(g.key,{max_followups:+e.target.value})}>{[0,1,2,3].map(n=><option key={n}>{n}</option>)}</select></label><label>Antworttyp<select value={g.kind} onChange={e=>update(g.key,{kind:e.target.value as Goal['kind'],choices:e.target.value==='choice'?['Ja','Nein']:[],unit:''})}><option value="text">Freie Antwort</option><option value="choice">Auswahl / Kategorie</option><option value="number">Zahl</option></select></label></div>{g.kind==='choice'&&<label>Optionen (eine pro Zeile)<textarea value={g.choices.join('\n')} onChange={e=>update(g.key,{choices:e.target.value.split('\n')})}/></label>}{g.kind==='number'&&<label>Einheit (z. B. EUR)<input value={g.unit} onChange={e=>update(g.key,{unit:e.target.value})}/></label>}<label>Nur fragen, wenn …<select value={g.condition?.goal_key||''} onChange={e=>{const source=config.goals.find(x=>x.key===e.target.value);update(g.key,{condition:source?{goal_key:source.key,equals:source.choices[0]}:null});}}><option value="">Immer</option>{config.goals.slice(0,i).filter(x=>x.kind==='choice'&&x.enabled).map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select></label>{g.condition&&<label>… diese Antwort vorliegt<select value={g.condition.equals} onChange={e=>update(g.key,{condition:{...g.condition!,equals:e.target.value}})}>{config.goals.find(x=>x.key===g.condition?.goal_key)?.choices.map(x=><option key={x}>{x}</option>)}</select></label>}</details>)}</div><button className="secondary" disabled={config.goals.length>=40} onClick={()=>onChange({...config,goals:[...config.goals,{key:'goal_'+crypto.randomUUID().replaceAll('-','').slice(0,10),topic:'startup',label:'Neues Antwortziel',criteria:'Beschreibe, welche konkreten Angaben benötigt werden.',question:'Was möchtest du uns dazu erzählen?',clarification:'Kannst du das bitte genauer beschreiben?',required:false,enabled:true,max_followups:1,kind:'text',choices:[],unit:'',condition:null}]})}>Antwortziel hinzufügen</button><p className="fine-print">Bedingungen müssen sich auf frühere Auswahlziele beziehen. Unpassende Kombinationen werden beim Veröffentlichen abgelehnt. Zum Entfernen ein Ziel deaktivieren.</p><label>Zusätzliche Hinweise<textarea value={config.guidance} onChange={e=>onChange({...config,guidance:e.target.value})}/></label></section>;
+import type { Config, Goal, MatchRule } from './api';
+export function GoalEditor({
+  config,
+  onChange,
+}: {
+  config: Config;
+  onChange: (c: Config) => void;
+}) {
+  // Keep edits immutable so the parent draft rerenders without mutating a published snapshot.
+  const update = (key: string, change: Partial<Goal>) =>
+    onChange({
+      ...config,
+      goals: config.goals.map((g) => (g.key === key ? { ...g, ...change } : g)),
+    });
+  // Ordering affects question priority and allowed prerequisite references; publication validates it.
+  const move = (i: number, d: number) => {
+    const goals = [...config.goals];
+    [goals[i], goals[i + d]] = [goals[i + d], goals[i]];
+    onChange({ ...config, goals });
+  };
+  return (
+    <section className="card settings-card">
+      <div className="section-top">
+        <h2>Antwortziele & Gesprächssteuerung</h2>
+        <span className="pill">
+          {config.goals.filter((g) => g.enabled).length} aktiv
+        </span>
+      </div>
+      <p className="muted">
+        Du bestimmst, was geklärt werden soll. Der Agent überspringt bereits
+        beantwortete Ziele und fragt gezielt nach. Pflichtziele haben Vorrang.
+        Formuliere Fragen in der gewählten Sprache.
+      </p>
+      <div className="topic-editor">
+        {config.goals.map((g, i) => (
+          <details key={g.key}>
+            <summary>
+              <span className="number">{i + 1}</span>
+              {g.label}
+              <small>
+                {!g.enabled ? 'Inaktiv' : g.required ? 'Pflicht' : 'Optional'}
+              </small>
+            </summary>
+            <div className="goal-actions">
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={g.enabled}
+                  onChange={(e) => update(g.key, { enabled: e.target.checked })}
+                />
+                Aktiv
+              </label>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={g.required}
+                  onChange={(e) =>
+                    update(g.key, { required: e.target.checked })
+                  }
+                />
+                Pflichtangabe
+              </label>
+              <button
+                className="secondary"
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                aria-label={g.label + ' nach oben'}
+              >
+                ↑
+              </button>
+              <button
+                className="secondary"
+                disabled={i === config.goals.length - 1}
+                onClick={() => move(i, 1)}
+                aria-label={g.label + ' nach unten'}
+              >
+                ↓
+              </button>
+            </div>
+            <label>
+              Bezeichnung
+              <input
+                value={g.label}
+                onChange={(e) => update(g.key, { label: e.target.value })}
+              />
+            </label>
+            <label>
+              Themenbereich
+              <select
+                value={g.topic}
+                onChange={(e) => update(g.key, { topic: e.target.value })}
+              >
+                {config.topics.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Wann reicht die Antwort aus?
+              <textarea
+                value={g.criteria}
+                onChange={(e) => update(g.key, { criteria: e.target.value })}
+              />
+            </label>
+            <label>
+              Frage
+              <textarea
+                value={g.question}
+                onChange={(e) => update(g.key, { question: e.target.value })}
+              />
+            </label>
+            <label>
+              Gezielte Rückfrage
+              <textarea
+                value={g.clarification}
+                onChange={(e) =>
+                  update(g.key, { clarification: e.target.value })
+                }
+              />
+            </label>
+            <div className="field-grid">
+              <label>
+                Maximale Rückfragen
+                <select
+                  value={g.max_followups}
+                  onChange={(e) =>
+                    update(g.key, { max_followups: +e.target.value })
+                  }
+                >
+                  {[0, 1, 2, 3].map((n) => (
+                    <option key={n}>{n}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Antworttyp
+                <select
+                  value={g.kind}
+                  onChange={(e) =>
+                    update(g.key, {
+                      kind: e.target.value as Goal['kind'],
+                      choices:
+                        e.target.value === 'choice' ? ['Ja', 'Nein'] : [],
+                      unit: '',
+                    })
+                  }
+                >
+                  <option value="text">Freie Antwort</option>
+                  <option value="choice">Auswahl / Kategorie</option>
+                  <option value="number">Zahl</option>
+                </select>
+              </label>
+            </div>
+            {g.kind === 'choice' && (
+              <label>
+                Optionen (eine pro Zeile)
+                <textarea
+                  value={g.choices.join('\n')}
+                  onChange={(e) =>
+                    update(g.key, { choices: e.target.value.split('\n') })
+                  }
+                />
+              </label>
+            )}
+            {g.kind === 'number' && (
+              <label>
+                Einheit (z. B. EUR)
+                <input
+                  value={g.unit}
+                  onChange={(e) => update(g.key, { unit: e.target.value })}
+                />
+              </label>
+            )}
+            <label>
+              Nur fragen, wenn …
+              <select
+                value={g.condition?.goal_key || ''}
+                onChange={(e) => {
+                  const source = config.goals.find(
+                    (x) => x.key === e.target.value,
+                  );
+                  update(g.key, {
+                    condition: source
+                      ? { goal_key: source.key, equals: source.choices[0] }
+                      : null,
+                  });
+                }}
+              >
+                <option value="">Immer</option>
+                {config.goals
+                  .slice(0, i)
+                  .filter((x) => x.kind === 'choice' && x.enabled)
+                  .map((x) => (
+                    <option key={x.key} value={x.key}>
+                      {x.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {g.condition && (
+              <label>
+                … diese Antwort vorliegt
+                <select
+                  value={g.condition.equals}
+                  onChange={(e) =>
+                    update(g.key, {
+                      condition: { ...g.condition!, equals: e.target.value },
+                    })
+                  }
+                >
+                  {config.goals
+                    .find((x) => x.key === g.condition?.goal_key)
+                    ?.choices.map((x) => (
+                      <option key={x}>{x}</option>
+                    ))}
+                </select>
+              </label>
+            )}
+          </details>
+        ))}
+      </div>
+      <button
+        className="secondary"
+        disabled={config.goals.length >= 40}
+        onClick={() =>
+          onChange({
+            ...config,
+            goals: [
+              ...config.goals,
+              {
+                key:
+                  'goal_' +
+                  crypto.randomUUID().replaceAll('-', '').slice(0, 10),
+                topic: 'startup',
+                label: 'Neues Antwortziel',
+                criteria:
+                  'Beschreibe, welche konkreten Angaben benötigt werden.',
+                question: 'Was möchtest du uns dazu erzählen?',
+                clarification: 'Kannst du das bitte genauer beschreiben?',
+                required: false,
+                enabled: true,
+                max_followups: 1,
+                kind: 'text',
+                choices: [],
+                unit: '',
+                condition: null,
+              },
+            ],
+          })
+        }
+      >
+        Antwortziel hinzufügen
+      </button>
+      <p className="fine-print">
+        Bedingungen müssen sich auf frühere Auswahlziele beziehen. Unpassende
+        Kombinationen werden beim Veröffentlichen abgelehnt. Zum Entfernen ein
+        Ziel deaktivieren.
+      </p>
+      <label>
+        Zusätzliche Hinweise
+        <textarea
+          value={config.guidance}
+          onChange={(e) => onChange({ ...config, guidance: e.target.value })}
+        />
+      </label>
+    </section>
+  );
 }
 // Match rules reference typed answer goals; free-text answers are not scored by keyword guessing.
-export function MatchEditor({config,onChange}:{config:Config;onChange:(c:Config)=>void}){
- const profile=config.match_profile;
- // This editor changes the draft profile; authoritative scoring is performed by the backend.
- const change=(rules:MatchRule[])=>onChange({...config,match_profile:{...profile,rules}});
- const update=(key:string,patch:Partial<MatchRule>)=>change(profile.rules.map(r=>r.goal_key===key?{...r,...patch}:r));
- return <section className="card settings-card setup"><h2>Dein Match-Zielprofil</h2><p className="muted">Welche Startups passen zu deinem Suchprofil? Ohne Kriterien wird kein Match-Score berechnet. Die Vollständigkeit der Antworten bleibt separat sichtbar.</p><label>Profilname<input value={profile.name} onChange={e=>onChange({...config,match_profile:{...profile,name:e.target.value}})}/></label>{profile.rules.map(r=>{const g=config.goals.find(g=>g.key===r.goal_key)!;return <div className="match-rule" key={r.goal_key}><div className="section-top"><h3>{g.label}</h3><button className="text-button" onClick={()=>change(profile.rules.filter(x=>x!==r))}>Entfernen</button></div>{r.operator==='one_of'?<div className="choice-chips">{g.choices.map(c=><label className="check-label" key={c}><input type="checkbox" checked={r.accepted.includes(c)} onChange={e=>update(r.goal_key,{accepted:e.target.checked?[...r.accepted,c]:r.accepted.filter(x=>x!==c)})}/>{c}</label>)}</div>:<div className="field-grid"><label>Minimum {g.unit}<input type="number" value={r.minimum??''} onChange={e=>update(r.goal_key,{minimum:e.target.value===''?null:+e.target.value})}/></label><label>Maximum {g.unit}<input type="number" value={r.maximum??''} onChange={e=>update(r.goal_key,{maximum:e.target.value===''?null:+e.target.value})}/></label></div>}<label>Gewicht (1–10)<input type="number" min={1} max={10} value={r.weight} onChange={e=>update(r.goal_key,{weight:+e.target.value})}/></label></div>;})}<label>Kriterium hinzufügen<select value="" onChange={e=>{const g=config.goals.find(g=>g.key===e.target.value);if(g)change([...profile.rules,{goal_key:g.key,weight:1,operator:g.kind==='choice'?'one_of':'range',accepted:g.kind==='choice'?[g.choices[0]]:[],minimum:g.kind==='number'?0:null,maximum:null}]);}}><option value="">Antwortziel auswählen …</option>{config.goals.filter(g=>g.enabled&&g.kind!=='text'&&!profile.rules.some(r=>r.goal_key===g.key)).map(g=><option key={g.key} value={g.key}>{g.label}</option>)}</select></label><p className="fine-print">Ein Kriterium trifft zu oder nicht. Score = gewichteter Anteil zutreffender Kriterien mit belegter Antwort. Fehlende Angaben bleiben unbekannt. Der Profilstand wird beim Gesprächsstart eingefroren.</p></section>;
+export function MatchEditor({
+  config,
+  onChange,
+}: {
+  config: Config;
+  onChange: (c: Config) => void;
+}) {
+  const profile = config.match_profile;
+  // This editor changes the draft profile; authoritative scoring is performed by the backend.
+  const change = (rules: MatchRule[]) =>
+    onChange({ ...config, match_profile: { ...profile, rules } });
+  const update = (key: string, patch: Partial<MatchRule>) =>
+    change(
+      profile.rules.map((r) => (r.goal_key === key ? { ...r, ...patch } : r)),
+    );
+  return (
+    <section className="card settings-card setup">
+      <h2>Dein Match-Zielprofil</h2>
+      <p className="muted">
+        Welche Startups passen zu deinem Suchprofil? Ohne Kriterien wird kein
+        Match-Score berechnet. Die Vollständigkeit der Antworten bleibt separat
+        sichtbar.
+      </p>
+      <label>
+        Profilname
+        <input
+          value={profile.name}
+          onChange={(e) =>
+            onChange({
+              ...config,
+              match_profile: { ...profile, name: e.target.value },
+            })
+          }
+        />
+      </label>
+      {profile.rules.map((r) => {
+        const g = config.goals.find((g) => g.key === r.goal_key)!;
+        return (
+          <div className="match-rule" key={r.goal_key}>
+            <div className="section-top">
+              <h3>{g.label}</h3>
+              <button
+                className="text-button"
+                onClick={() => change(profile.rules.filter((x) => x !== r))}
+              >
+                Entfernen
+              </button>
+            </div>
+            {r.operator === 'one_of' ? (
+              <div className="choice-chips">
+                {g.choices.map((c) => (
+                  <label className="check-label" key={c}>
+                    <input
+                      type="checkbox"
+                      checked={r.accepted.includes(c)}
+                      onChange={(e) =>
+                        update(r.goal_key, {
+                          accepted: e.target.checked
+                            ? [...r.accepted, c]
+                            : r.accepted.filter((x) => x !== c),
+                        })
+                      }
+                    />
+                    {c}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div className="field-grid">
+                <label>
+                  Minimum {g.unit}
+                  <input
+                    type="number"
+                    value={r.minimum ?? ''}
+                    onChange={(e) =>
+                      update(r.goal_key, {
+                        minimum: e.target.value === '' ? null : +e.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Maximum {g.unit}
+                  <input
+                    type="number"
+                    value={r.maximum ?? ''}
+                    onChange={(e) =>
+                      update(r.goal_key, {
+                        maximum: e.target.value === '' ? null : +e.target.value,
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+            <label>
+              Gewicht (1–10)
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={r.weight}
+                onChange={(e) =>
+                  update(r.goal_key, { weight: +e.target.value })
+                }
+              />
+            </label>
+          </div>
+        );
+      })}
+      <label>
+        Kriterium hinzufügen
+        <select
+          value=""
+          onChange={(e) => {
+            const g = config.goals.find((g) => g.key === e.target.value);
+            if (g)
+              change([
+                ...profile.rules,
+                {
+                  goal_key: g.key,
+                  weight: 1,
+                  operator: g.kind === 'choice' ? 'one_of' : 'range',
+                  accepted: g.kind === 'choice' ? [g.choices[0]] : [],
+                  minimum: g.kind === 'number' ? 0 : null,
+                  maximum: null,
+                },
+              ]);
+          }}
+        >
+          <option value="">Antwortziel auswählen …</option>
+          {config.goals
+            .filter(
+              (g) =>
+                g.enabled &&
+                g.kind !== 'text' &&
+                !profile.rules.some((r) => r.goal_key === g.key),
+            )
+            .map((g) => (
+              <option key={g.key} value={g.key}>
+                {g.label}
+              </option>
+            ))}
+        </select>
+      </label>
+      <p className="fine-print">
+        Ein Kriterium trifft zu oder nicht. Score = gewichteter Anteil
+        zutreffender Kriterien mit belegter Antwort. Fehlende Angaben bleiben
+        unbekannt. Der Profilstand wird beim Gesprächsstart eingefroren.
+      </p>
+    </section>
+  );
 }

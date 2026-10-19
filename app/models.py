@@ -64,6 +64,8 @@ class Extraction(StrictModel):
     answers: list[GoalAnswer] = Field(default_factory=list, max_length=40)
     acknowledgment: str = Field(default="", max_length=180)
     confirmed_summary: bool = False
+    # Dialogue requests are not failed attempts to answer the pending goal.
+    dialogue_act: Literal["answer", "repeat", "clarify", "review_missing"] = "answer"
 
 
 # Turn IDs provide idempotency; evidence quotes must refer to this turn's original text.

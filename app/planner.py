@@ -85,8 +85,24 @@ def create(owner: str, config: AgentConfig, mode: InterviewMode) -> Interview:
     # Validated configurations have an enabled, initially applicable goal.
     assert first_goal is not None
     ask(interview, first_goal)
-    interview.last_reply = (f'Hi, ich bin {config.name}. Schön, dass du da bist. ' if config.language=='de'
-                       else f"Hi, I'm {config.name}. It's lovely to meet you. ") + interview.last_reply
+    interview.last_reply = (
+        (f'Hi, ich bin {config.name}. Schön, dass du da bist. '
+         'Ich stelle dir nacheinander Fragen zu eurem Startup und hake nach, wenn noch etwas fehlt. '
+         'Antworte einfach frei in deinen eigenen Worten. Wenn du etwas nicht weißt, sag das ruhig. '
+         'Du kannst mich bitten, eine Frage zu wiederholen oder zu erklären. '
+         'Für eine Korrektur sag einfach, welche frühere Angabe du ändern möchtest, und nenne die richtige. '
+         'Am Ende gehen wir die Zusammenfassung gemeinsam durch. Mit dem Stopp-Button kannst du jederzeit aufhören. '
+         'Ich beginne jetzt mit der ersten Frage. '
+         if config.language == 'de' else
+         f"Hi, I'm {config.name}. It's lovely to meet you. "
+         "I'll ask questions about your startup one at a time and follow up when something is missing. "
+         "Answer freely in your own words. If you don't know something, just say so. "
+         "You can ask me to repeat or explain a question. "
+         "To make a correction, tell me which earlier detail you want to change and give the correct information. "
+         "At the end, we'll review the summary together. You can leave at any time using the stop button. "
+         "I will now start with the first question. ")
+        + interview.last_reply
+    )
     return interview
 
 
@@ -124,7 +140,16 @@ def advance(interview: Interview, turn: Turn) -> Interview:
             or answer.number_value is not None and goal.kind!='number'
             or answer.status=='answered' and (goal.kind=='choice' and answer.choice_value is None or goal.kind=='number' and answer.number_value is None)):
             raise ServiceError('INVALID_ANSWER','Die Antwort passt nicht zum konfigurierten Antworttyp.',422)
+    # A question cannot authorize completion, even if extraction mislabels confirmation.
+    question_text = '?' in turn.text or bool(re.match(
+        r'\s*(welche|welcher|welches|was|wie|wo|wann|warum|wieso|kannst|könntest|what|which|how|when|why|can you)\b',
+        turn.text, re.IGNORECASE))
     for answer in turn.extraction.answers:
+        # A request to explain/repeat is not evidence that the founder lacks the answer.
+        if answer.goal_key == interview.current_goal and (turn.extraction.dialogue_act != 'answer'
+                or question_text and answer.status != 'answered'):
+            seen.discard(answer.goal_key)
+            continue
         state=interview.goals[answer.goal_key]
         if answer.goal_key == 'startup_name' and legal_form_only(answer.value):
             # A suffix is not a replacement for an already evidenced company name.
@@ -136,6 +161,9 @@ def advance(interview: Interview, turn: Turn) -> Interview:
         state.evidence_turn=turn.id
         if state.status=='answered':
             state.exhausted=False
+        elif (answer.goal_key != interview.current_goal and state.asked
+              and state.status in ('open', 'partial') and state.followups_used >= by_key[answer.goal_key].max_followups):
+            state.exhausted = True
         # Explicit corrections preserve their evidence, including a retraction to unknown.
     if not any(t.id==turn.id for t in interview.transcript):
         interview.transcript.append(TranscriptItem(id=turn.id,role='user',text=turn.text,
@@ -144,6 +172,51 @@ def advance(interview: Interview, turn: Turn) -> Interview:
     current=interview.goals.get(interview.current_goal) if interview.current_goal is not None else None
     current_goal=by_key.get(interview.current_goal) if interview.current_goal is not None else None
     was_review=interview.status=='review'
+    act = turn.extraction.dialogue_act
+    if was_review and (act in ('review_missing', 'clarify', 'repeat') or question_text):
+        missing = [g for g in interview.config.goals if g.required
+                   and applicability(interview, g) is not False
+                   and (applicability(interview, g) is None or interview.goals[g.key].status != 'answered')]
+        if act == 'repeat':
+            interview.last_reply = (
+                ('Ich lese die Zusammenfassung noch einmal vollständig vor. ' if de else
+                 'I will read the full summary again. ')
+                + spoken_summary(interview)
+                + (' Stimmt das, oder möchtest du etwas korrigieren?' if de else
+                   ' Is that correct, or would you like to correct anything?')
+            )
+        elif missing:
+            labels = ', '.join(g.label for g in missing)
+            interview.last_reply = ((f'Noch offen sind: {labels}. Du kannst diese Angaben jetzt ergänzen. '
+                                     if de else f'Still missing: {labels}. You can add these answers now. ')
+                                    + missing[0].question)
+        else:
+            interview.last_reply = (
+                ('Ich lese die Zusammenfassung noch einmal vollständig vor. ' if de else
+                 'I will read the full summary again. ')
+                + spoken_summary(interview)
+                + (' Stimmt das, oder möchtest du etwas korrigieren?' if de else
+                   ' Is that correct, or would you like to correct anything?')
+            )
+        sync_topics(interview)
+        interview.processed_turns[turn.id] = digest
+        interview.revision += 1
+        return interview
+    # Keep the pending question when this turn only supplied facts for other goals.
+    other_answers_only = bool(seen) and interview.current_goal not in seen
+    if (current and current_goal and applicability(interview, current_goal) is True
+            and (act in ('repeat', 'clarify', 'review_missing') or other_answers_only or question_text)
+            and (interview.current_goal not in seen or act != 'answer')):
+        prompt = interview.current_prompt or current_goal.question
+        if act == 'clarify' or (question_text and act == 'answer'):
+            prompt = ((f'Gemeint ist: {current_goal.criteria} ' if de else f'What we need is: {current_goal.criteria} ')
+                      + current_goal.question)
+        interview.last_reply = prompt
+        interview.interrupted_question = None
+        sync_topics(interview)
+        interview.processed_turns[turn.id] = digest
+        interview.revision += 1
+        return interview
     if current and current_goal and current.status not in ('answered','unknown') and applicability(interview,current_goal) is True:
         if interview.interrupted_question:
             interview.last_reply=interview.interrupted_question
@@ -170,7 +243,17 @@ def advance(interview: Interview, turn: Turn) -> Interview:
     else:
         interview.status,interview.current_goal,interview.current_topic='review',None,None
         interview.current_prompt=''
-        interview.last_reply=spoken_summary(interview)+(' Stimmt das, oder möchtest du etwas korrigieren?' if de else ' Is that correct, or would you like to correct anything?')
+        # Announce the review once; corrections get a shorter transition.
+        transition = (
+            ('Hier ist die aktualisierte Zusammenfassung. ' if de else 'Here is the updated summary. ')
+            if was_review else
+            ('Danke für deine Angaben. Damit sind wir am Ende der Fragerunde. '
+             'Ich fasse jetzt zusammen, was ich verstanden habe. Danach kannst du noch etwas korrigieren oder ergänzen. '
+             if de else
+             "Thank you for sharing. That's the end of the questions. "
+             "I'll now summarize what I've understood. Afterwards, you can correct or add anything. ")
+        )
+        interview.last_reply=transition+spoken_summary(interview)+(' Stimmt das, oder möchtest du etwas korrigieren?' if de else ' Is that correct, or would you like to correct anything?')
     sync_topics(interview)
     interview.processed_turns[turn.id]=digest
     interview.revision+=1

@@ -125,3 +125,90 @@ def test_config_cannot_drop_or_duplicate_required_topics() -> None:
     config['topics'][1] = config['topics'][0]
     with pytest.raises(ValueError):
         AgentConfig.model_validate(config)
+
+@pytest.mark.parametrize('budget', [0, 1])
+def test_corrections_do_not_consume_pending_question(budget: int) -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    team = next(g for g in interview.config.goals if g.key == 'team')
+    team.max_followups = budget
+    prompt = interview.current_prompt
+    for index, name in enumerate(('Beta', 'Gamma')):
+        turn = make_turn(id=f'correction{index}', text=name)
+        apply_turn(interview, turn)
+        assert interview.current_goal == 'team'
+        assert interview.current_prompt == prompt
+        assert interview.last_reply == prompt
+        assert interview.goals['team'].followups_used == 0
+        assert not interview.goals['team'].exhausted
+        before = interview.model_dump()
+        apply_turn(interview, turn)
+        assert interview.model_dump() == before
+    apply_turn(interview, make_turn(id='team-answer', key='team', text='Two experienced founders'))
+    assert interview.status == 'review'
+    assert interview.goals['startup_name'].value == 'Gamma'
+
+
+@pytest.mark.parametrize('act', ['repeat', 'clarify'])
+def test_question_requests_preserve_even_last_followup(act: str) -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn(status='partial'))
+    assert interview.goals['startup_name'].followups_used == 1
+    for index in range(2):
+        request = Extraction.model_validate({'dialogue_act': act})
+        apply_turn(interview, Turn(id=f'request{index}', text='Kannst du die Frage erklären?', extraction=request))
+        assert interview.current_goal == 'startup_name'
+        assert interview.goals['startup_name'].followups_used == 1
+        assert not interview.goals['startup_name'].exhausted
+    apply_turn(interview, make_turn(id='actual-answer'))
+    assert interview.current_goal == 'team'
+
+
+def test_missing_information_question_cannot_confirm_review() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    apply_turn(interview, make_turn(id='team', key='team', status='unknown'))
+    apply_turn(interview, Turn(id='missing', text='Für welche Pflichtangaben fehlen noch die Antworten?',
+                              extraction=Extraction(confirmed_summary=True)))
+    assert interview.status == 'review'
+    assert interview.ended_at is None
+    assert 'Team & Erfahrung' in interview.last_reply
+    apply_turn(interview, make_turn(id='extra', key='team', text='Two experienced founders'))
+    assert interview.goals['team'].status == 'answered'
+    apply_turn(interview, Turn(id='confirm', text='Ja, stimmt.', extraction=Extraction(confirmed_summary=True)))
+    assert interview.status == 'completed'
+
+
+def test_correction_and_pending_answer_in_same_turn_both_apply() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    text = 'Beta. Two experienced founders.'
+    apply_turn(interview, Turn(id='both', text=text, extraction=Extraction(answers=[
+        GoalAnswer(goal_key='startup_name', value='Beta', quote='Beta', status='answered'),
+        GoalAnswer(goal_key='team', value='Two experienced founders', quote='Two experienced founders', status='answered'),
+    ])))
+    assert interview.status == 'review'
+    assert interview.goals['startup_name'].value == 'Beta'
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_repeat_summary_preserves_all_facts_and_review(missing: bool) -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    apply_turn(interview, make_turn(id='team', key='team', text='Team detail', status='unknown' if missing else 'answered'))
+    expected = summary(interview)
+    apply_turn(interview, Turn(id='repeat', text='Die Zusammenfassung war zu kurz.',
+                              extraction=Extraction(dialogue_act='repeat', confirmed_summary=True)))
+    assert expected in interview.last_reply
+    assert interview.status == 'review'
+    assert interview.ended_at is None
+
+
+def test_correction_generates_full_summary_including_unchanged_facts() -> None:
+    interview = small_interview()
+    apply_turn(interview, make_turn())
+    apply_turn(interview, make_turn(id='team', key='team', text='Team detail'))
+    apply_turn(interview, make_turn(id='correct', text='Beta'))
+    assert summary(interview) in interview.last_reply
+    assert 'Beta' in interview.last_reply
+    assert 'Team detail' in interview.last_reply
+    assert interview.status == 'review'

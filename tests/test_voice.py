@@ -57,7 +57,7 @@ async def test_worker_speaks_only_canonical_persisted_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_closes_after_repeated_extraction_failure() -> None:
+async def test_worker_preserves_question_after_repeated_extraction_failure() -> None:
     class Broken:
         async def extract(self,*args: object) -> Never:
             raise TimeoutError()
@@ -68,8 +68,10 @@ async def test_worker_closes_after_repeated_extraction_failure() -> None:
     from voice.worker import RETRY_MESSAGES
     assert first[0] in RETRY_MESSAGES['de']
     second=[part async for part in agent.llm_node(None,[],None)]
-    assert 'nicht zuverlässig' in second[0]
-    assert backend.state.status=='incomplete'
+    assert 'Wir bleiben bei dieser Frage' in second[0]
+    assert backend.state.status=='active'
+    assert backend.state.current_goal=='startup_name'
+    assert not any(path=='/stop' for _,path,_ in backend.calls)
     assert not any(path=='/turns' for _,path,_ in backend.calls)
     assert any(path=='/speech' for _,path,_ in backend.calls)
 
@@ -103,6 +105,73 @@ async def test_worker_does_not_claim_success_on_failed_write() -> None:
     result=[part async for part in agent.llm_node(None,[],None)]
     assert 'gespeichert' not in result[0]
     assert backend.state.current_topic=='startup'
+
+
+@pytest.mark.asyncio
+async def test_committed_turn_with_lost_response_is_reconciled() -> None:
+    backend = FakeBackend()
+    original = backend.request
+    async def lost_response(method: str, path: str = '', payload: Document | None = None) -> Document:
+        result = await original(method, path, payload)
+        if path == '/turns':
+            raise httpx.ReadTimeout('private payload')
+        return result
+    setattr(backend, 'request', lost_response)
+    agent = Interviewer(backend.state.model_copy(deep=True), backend, FakeExtractor())
+    agent.pending_turn = ('saved-turn', 'Acme')
+    result = [part async for part in agent.llm_node(None, [], None)]
+    assert result == [backend.state.last_reply]
+    assert agent.state.current_goal == 'sector'
+    assert agent.failures == 0
+    assert sum(path == '/turns' for _, path, _ in backend.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_validation_failure_then_success_keeps_budget_and_logs_no_secrets(caplog: pytest.LogCaptureFixture) -> None:
+    backend = FakeBackend()
+    original = backend.request
+    async def rejected(method: str, path: str = '', payload: Document | None = None) -> Document:
+        if path == '/turns':
+            response = httpx.Response(422, text='secret transcript', request=httpx.Request('POST', 'https://example.test'))
+            raise httpx.HTTPStatusError('secret credential', request=response.request, response=response)
+        return await original(method, path, payload)
+    setattr(backend, 'request', rejected)
+    agent = Interviewer(backend.state.model_copy(deep=True), backend, FakeExtractor())
+    agent.pending_turn = ('rejected-turn', 'Acme')
+    before = {key: value.model_copy(deep=True) for key, value in backend.state.goals.items()}
+    _ = [part async for part in agent.llm_node(None, [], None)]
+    assert backend.state.goals == before
+    assert 'category=validation' in caplog.text and 'stage=save_turn' in caplog.text
+    assert 'secret' not in caplog.text
+    setattr(backend, 'request', original)
+    agent.pending_turn = ('new-turn', 'Acme')
+    result = [part async for part in agent.llm_node(None, [], None)]
+    assert result == [backend.state.last_reply]
+    assert agent.failures == 0
+
+
+@pytest.mark.asyncio
+async def test_metrics_failure_never_replays_or_rejects_successful_answer() -> None:
+    backend = FakeBackend()
+    original = backend.request
+    async def failed_metric(method: str, path: str = '', payload: Document | None = None) -> Document:
+        if path == '/metrics':
+            raise ValueError('private metric response')
+        return await original(method, path, payload)
+    setattr(backend, 'request', failed_metric)
+    agent = Interviewer(backend.state, backend, FakeExtractor())
+    agent.pending_turn = ('turn', 'Acme')
+    result = [part async for part in agent.llm_node(None, [], None)]
+    assert result == [backend.state.last_reply]
+    assert agent.failures == 0
+
+
+@pytest.mark.parametrize('status,retry', [(401, False), (403, False), (404, False), (429, True), (503, True)])
+def test_watchdog_only_tolerates_transient_errors(status: int, retry: bool) -> None:
+    from voice.diagnostics import transient_backend_error
+    response = httpx.Response(status, request=httpx.Request('GET', 'https://example.test'))
+    error = httpx.HTTPStatusError('private', request=response.request, response=response)
+    assert transient_backend_error(error) == retry
 
 
 @pytest.mark.asyncio

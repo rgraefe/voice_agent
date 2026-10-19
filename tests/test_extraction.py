@@ -22,9 +22,9 @@ async def test_goal_tool_contract_prevents_obsolete_fact_fields() -> None:
         state=create_interview('test',AgentConfig(),'voice')
         result,_=await extractor.extract('Lumio',state)
         params=create.call_args.kwargs['tools'][0]['function']['parameters']
-        assert set(params['properties'])=={'answers','acknowledgment','confirmed_summary'}
+        assert set(params['properties'])=={'answers','acknowledgment','confirmed_summary','dialogue_act'}
         assert params['additionalProperties'] is False
         assert result.answers[0].value=='Lumio'
-        assert set(result.model_dump()) == {"answers", "acknowledgment", "confirmed_summary"}
+        assert set(result.model_dump()) == {"answers", "acknowledgment", "confirmed_summary", "dialogue_act"}
     finally:
         await extractor.client.close()
